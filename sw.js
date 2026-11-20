@@ -1,5 +1,5 @@
-const V = 'satsky-v1';
-const SHELL = ['./', 'index.html', 'satellite.min.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
+const V = 'satsky-v3';
+const SHELL = ['./', 'index.html', 'satellite.min.js', 'core.js', 'kb.js', 'land.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('satsky-') && k !== V).map(k => caches.delete(k)))));
