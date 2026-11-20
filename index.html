@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#05070f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SatSky">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>SatSky</title>
+<style>
+/*
+VOICE  calme, nocturne, instrument de visée
+IDEA   un viseur d'observatoire posé sur l'image caméra
+PICTURE le ciel lui-même, plein écran, avec réticule et horizon
+COLOUR nuit #05070f, ambre #ffcf5c pour ce qui est visible à l'œil, bleu glacier #8fb8ff pour le reste
+LAYOUT viewport plein écran, barre haute fine, carte d'info et boutons en bas
+*/
+:root{--bg:#05070f;--panel:rgba(10,14,28,.82);--line:rgba(160,190,255,.22);--ink:#e8eefc;--dim:#8a96b3;--amber:#ffcf5c;--ice:#8fb8ff;--red:#ff6b6b;
+--st:env(safe-area-inset-top,0px);--sb:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box;min-width:0;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;overscroll-behavior:none;touch-action:none}
+#video,#cv{position:fixed;inset:0;width:100%;height:100%}
+#video{object-fit:cover;opacity:.9}
+body.map #video{display:none}
+#top{position:fixed;left:0;right:0;top:0;padding:calc(var(--st) + 8px) 12px 8px;display:flex;gap:8px;align-items:center;background:linear-gradient(var(--bg),transparent)}
+#top select{flex:1;max-width:240px}
+#stat{font-size:13px;color:var(--dim);text-align:right;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#stat b{color:var(--amber);font-weight:600}
+select,button,input[type=search]{font:inherit;font-size:16px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:12px;min-height:44px;padding:0 12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+button{cursor:pointer}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+button.on{border-color:var(--amber);color:var(--amber)}
+#bottom{position:fixed;left:0;right:0;bottom:0;padding:8px 12px calc(var(--sb) + 10px);display:grid;gap:8px;background:linear-gradient(transparent,var(--bg) 55%)}
+#bar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+#card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:10px 14px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:none}
+#card.show{display:block}
+#card h2{margin:0 0 4px;font-size:17px;display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+#card h2 small{font-weight:400;color:var(--dim);font-size:13px;white-space:nowrap}
+#card .g{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px 10px;font-size:13px;color:var(--dim)}
+#card .g b{display:block;color:var(--ink);font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+.tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid currentColor}
+.tag.v{color:var(--amber)}.tag.l{color:var(--ice)}.tag.s{color:var(--dim)}
+.sheet{position:fixed;left:0;right:0;bottom:0;max-height:72vh;background:#0a0e1c;border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding:14px 14px calc(var(--sb) + 14px);transform:translateY(105%);transition:transform .25s;display:flex;flex-direction:column;gap:10px;z-index:5}
+.sheet.open{transform:none}
+.sheet header{display:flex;gap:8px;align-items:center}
+.sheet header h3{margin:0;flex:1;font-size:17px}
+#list{overflow:auto;margin:0;padding:0;list-style:none;-webkit-overflow-scrolling:touch;touch-action:pan-y}
+#list li{display:flex;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--line);min-height:44px}
+#list li span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#list li em{font-style:normal;color:var(--dim);font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dot{width:10px;height:10px;border-radius:50%;flex:none}
+label.row{display:grid;gap:4px;font-size:14px;color:var(--dim)}
+label.row output{color:var(--ink)}
+input[type=range]{width:100%;height:32px;accent-color:var(--amber)}
+.check{display:flex;gap:10px;align-items:center;min-height:44px;font-size:15px}
+.check input{width:22px;height:22px;accent-color:var(--amber)}
+#settings p{margin:0;font-size:13px;color:var(--dim)}
+#start{position:fixed;inset:0;z-index:10;background:radial-gradient(ellipse at 50% 30%,#141c3a,var(--bg) 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:24px;text-align:center}
+#start h1{margin:0;font-size:40px;line-height:1.05;letter-spacing:-.5px}
+#start h1 span{color:var(--amber)}
+#start p{margin:0;max-width:34ch;color:var(--dim)}
+#start button{min-width:220px;background:var(--amber);color:#1a1300;border:0;font-weight:700}
+#start .alt{background:transparent;color:var(--ink);border:1px solid var(--line);font-weight:400}
+#toast{position:fixed;left:50%;top:calc(var(--st) + 64px);transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 14px;font-size:14px;max-width:90vw;display:none;z-index:6}
+@media (prefers-reduced-motion:reduce){.sheet{transition:none}}
+</style>
+</head>
+<body>
+<video id="video" playsinline muted autoplay></video>
+<canvas id="cv"></canvas>
+
+<div id="top">
+  <select id="group" aria-label="Catégorie de satellites">
+    <option value="visual">Les plus brillants</option>
+    <option value="stations">Stations spatiales</option>
+    <option value="starlink">Starlink</option>
+    <option value="gps-ops">GPS</option>
+    <option value="weather">Météo</option>
+    <option value="active">Tous les actifs (lourd)</option>
+  </select>
+  <div id="stat">Chargement…</div>
+</div>
+
+<div id="bottom">
+  <div id="card"></div>
+  <div id="bar">
+    <button id="bList">Liste</button>
+    <button id="bMode">Carte</button>
+    <button id="bClear">Viser</button>
+    <button id="bSet">Réglages</button>
+  </div>
+</div>
+
+<section class="sheet" id="sheetList" aria-label="Satellites au-dessus de l'horizon">
+  <header><h3>Au-dessus de l'horizon</h3><button data-close>Fermer</button></header>
+  <input type="search" id="q" placeholder="Rechercher (ISS, Hubble, Starlink…)" autocomplete="off">
+  <ul id="list"></ul>
+</section>
+
+<section class="sheet" id="settings" aria-label="Réglages">
+  <header><h3>Réglages</h3><button data-close>Fermer</button></header>
+  <label class="row">Correction du nord : <output id="oOff">0°</output>
+    <input type="range" id="rOff" min="-180" max="180" step="1" value="0"></label>
+  <p>Vise la Lune ou un repère connu, puis ajuste jusqu'à ce que la grille tombe juste.</p>
+  <label class="row">Champ de vision caméra : <output id="oFov">66°</output>
+    <input type="range" id="rFov" min="40" max="100" step="1" value="66"></label>
+  <label class="check"><input type="checkbox" id="cVis"> Seulement ceux visibles à l'œil nu</label>
+  <label class="check"><input type="checkbox" id="cCam" checked> Afficher la caméra</label>
+  <p id="pos">Position : —</p>
+  <button id="bLoc">Mettre à jour ma position</button>
+  <p>Données orbitales : CelesTrak (mises en cache 6 h). Calcul SGP4 dans le téléphone.</p>
+</section>
+
+<div id="start">
+  <h1>Sat<span>Sky</span></h1>
+  <p>Lève ton téléphone vers le ciel : les satellites apparaissent là où ils passent, en direct.</p>
+  <button id="go">Démarrer la visée</button>
+  <button id="goMap" class="alt">Carte du ciel sans caméra</button>
+  <p style="font-size:13px">Autorise la position, la caméra et les capteurs de mouvement.</p>
+</div>
+<div id="toast"></div>
+
+<script src="satellite.min.js"></script>
+<script>
+{
+const $ = s => document.querySelector(s);
+const D = Math.PI / 180;
+const ls = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
+const S = {
+  group: ls.get('group', 'visual'),
+  obs: ls.get('obs', { lat: 48.8566, lon: 2.3522, h: 0.035, src: 'Paris par défaut' }),
+  off: ls.get('off', 0), fov: ls.get('fov', 66), onlyVis: ls.get('onlyVis', false), cam: ls.get('cam', true),
+  mode: 'ar', sats: [], sel: null, aim: null, R: null, sunEl: 0, follow: true,
+  W: 0, H: 0, dpr: 1, lastCalc: 0, loading: false
+};
+const cv = $('#cv'), ctx = cv.getContext('2d'), video = $('#video');
+
+function toast(t, ms = 3500) { const el = $('#toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => el.style.display = 'none', ms); }
+function resize() { S.dpr = Math.min(devicePixelRatio || 1, 2); S.W = innerWidth; S.H = innerHeight; cv.width = S.W * S.dpr; cv.height = S.H * S.dpr; ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0); }
+addEventListener('resize', resize); resize();
+
+/* ---------- Données TLE (CelesTrak) ---------- */
+async function fetchTLE(g) {
+  const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${g}&FORMAT=tle`;
+  let cache = null, hit = null;
+  try { cache = await caches.open('tle-v1'); hit = await cache.match(url); } catch {}
+  if (hit && Date.now() - +hit.headers.get('x-t') < 6 * 3600e3) return hit.text();
+  try {
+    const r = await fetch(url);
+    const txt = await r.text();
+    if (!r.ok || !/\n1 /.test(txt)) throw new Error(txt.slice(0, 120));
+    if (cache) cache.put(url, new Response(txt, { headers: { 'x-t': String(Date.now()) } })).catch(() => {});
+    return txt;
+  } catch (e) {
+    if (hit) { toast('Hors ligne : données en cache utilisées'); return hit.text(); }
+    throw e;
+  }
+}
+function parseTLE(txt) {
+  const L = txt.split(/\r?\n/).map(l => l.trimEnd()).filter(Boolean), out = [];
+  for (let i = 0; i + 2 < L.length + 1; i++) {
+    if (L[i + 1]?.startsWith('1 ') && L[i + 2]?.startsWith('2 ')) {
+      try {
+        const rec = satellite.twoline2satrec(L[i + 1], L[i + 2]);
+        out.push({ name: L[i].trim(), id: L[i + 1].slice(2, 7).trim(), rec, el: -90, az: 0, lit: false });
+      } catch {}
+      i += 2;
+    }
+  }
+  return out;
+}
+async function loadGroup(g) {
+  S.loading = true; $('#stat').textContent = 'Chargement des orbites…';
+  try {
+    S.sats = parseTLE(await fetchTLE(g)); S.sel = null; S.group = g; ls.set('group', g);
+    compute(); S.lastCalc = performance.now();
+  } catch (e) {
+    $('#stat').textContent = 'Erreur de chargement';
+    toast('Impossible de récupérer les orbites (CelesTrak). Réessaie dans un moment.');
+  }
+  S.loading = false;
+}
+
+/* ---------- Soleil et calculs ---------- */
+function sunEci(d) {
+  const n = d / 864e5 + 2440587.5 - 2451545;
+  const L = 280.46 + 0.9856474 * n, g = (357.528 + 0.9856003 * n) * D;
+  const lam = (L + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * D, eps = (23.439 - 4e-7 * n) * D;
+  const R = 1.496e8 * (1.00014 - 0.01671 * Math.cos(g) - 0.00014 * Math.cos(2 * g));
+  return { x: R * Math.cos(lam), y: R * Math.cos(eps) * Math.sin(lam), z: R * Math.sin(eps) * Math.sin(lam) };
+}
+function compute() {
+  const now = new Date(), gmst = satellite.gstime(now);
+  const o = { latitude: S.obs.lat * D, longitude: S.obs.lon * D, height: S.obs.h };
+  const sun = sunEci(now), sl = Math.hypot(sun.x, sun.y, sun.z), su = { x: sun.x / sl, y: sun.y / sl, z: sun.z / sl };
+  S.sunEl = satellite.ecfToLookAngles(o, satellite.eciToEcf(sun, gmst)).elevation / D;
+  const dark = S.sunEl < -6;
+  let up = 0, vis = 0;
+  for (const s of S.sats) {
+    const pv = satellite.propagate(s.rec, now);
+    if (!pv || !pv.position || isNaN(pv.position.x)) { s.el = -90; continue; }
+    const p = pv.position, la = satellite.ecfToLookAngles(o, satellite.eciToEcf(p, gmst));
+    s.el = la.elevation / D; s.az = la.azimuth / D; s.range = la.rangeSat;
+    if (s.el < 0) continue;
+    const pr = p.x * su.x + p.y * su.y + p.z * su.z;
+    s.lit = pr > 0 || Math.hypot(p.x - pr * su.x, p.y - pr * su.y, p.z - pr * su.z) > 6371;
+    s.eye = s.lit && dark;
+    s.speed = Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z);
+    s.alt = Math.hypot(p.x, p.y, p.z) - 6371;
+    up++; if (s.eye) vis++;
+  }
+  S.up = up; S.vis = vis;
+  const sky = S.sunEl > 0 ? 'jour' : S.sunEl > -6 ? 'crépuscule' : 'nuit';
+  $('#stat').innerHTML = `${up} au-dessus · <b>${vis} visibles</b> · ${sky}`;
+}
+function trackOf(s, minutes = 6, step = 20) {
+  const pts = [], o = { latitude: S.obs.lat * D, longitude: S.obs.lon * D, height: S.obs.h }, t0 = Date.now();
+  for (let t = -minutes * 60; t <= minutes * 60; t += step) {
+    const d = new Date(t0 + t * 1000), pv = satellite.propagate(s.rec, d);
+    if (!pv || !pv.position) continue;
+    const la = satellite.ecfToLookAngles(o, satellite.eciToEcf(pv.position, satellite.gstime(d)));
+    pts.push({ az: la.azimuth / D, el: la.elevation / D, t });
+  }
+  return pts;
+}
+
+/* ---------- Orientation du téléphone ---------- */
+let iosHeading = null;
+function rot(a, b, g) {
+  a *= D; b *= D; g *= D;
+  const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cg = Math.cos(g), sg = Math.sin(g);
+  return [ca * cg - sa * sb * sg, -sa * cb, ca * sg + sa * sb * cg,
+          sa * cg + ca * sb * sg, ca * cb, sa * sg - ca * sb * cg,
+          -cb * sg, sb, cb * cg];
+}
+function onOri(e, absolute) {
+  if (e.alpha == null) return;
+  let alpha = e.alpha;
+  if (e.webkitCompassHeading != null) alpha = 360 - e.webkitCompassHeading;
+  else if (!absolute && !e.absolute) return; /* attendre l'évènement absolu */
+  const M = rot(alpha - S.off, e.beta, e.gamma);
+  if (!S.R) S.R = M;
+  else { /* lissage, en évitant le saut à 0/360° */
+    const k = 0.25;
+    for (let i = 0; i < 9; i++) S.R[i] += (M[i] - S.R[i]) * k;
+  }
+  S.oriAt = performance.now();
+}
+let gotAbs = false;
+function startSensors() {
+  addEventListener('deviceorientationabsolute', e => { gotAbs = true; onOri(e, true); });
+  addEventListener('deviceorientation', e => { if (!gotAbs) onOri(e, false); });
+}
+async function askOrientation() {
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== 'granted') toast('Capteurs refusés : passe par la carte du ciel.');
+    }
+  } catch {}
+  startSensors();
+}
+async function startCamera() {
+  if (!S.cam || !navigator.mediaDevices?.getUserMedia) return;
+  try {
+    const st = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    video.srcObject = st; await video.play().catch(() => {});
+  } catch { toast('Caméra indisponible : la visée marche quand même sur fond noir.'); }
+}
+function stopCamera() { video.srcObject?.getTracks().forEach(t => t.stop()); video.srcObject = null; }
+function locate(silent) {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(p => {
+    S.obs = { lat: p.coords.latitude, lon: p.coords.longitude, h: (p.coords.altitude || 35) / 1000, src: 'GPS' };
+    ls.set('obs', S.obs); showPos(); compute();
+    if (!silent) toast('Position mise à jour');
+  }, () => toast(`Position refusée : ${S.obs.src} utilisé.`), { enableHighAccuracy: true, timeout: 15000, maximumAge: 600000 });
+}
+function showPos() { $('#pos').textContent = `Position : ${S.obs.lat.toFixed(3)}°, ${S.obs.lon.toFixed(3)}° (${S.obs.src})`; }
+
+/* ---------- Projection ---------- */
+function enu(az, el) { const c = Math.cos(el * D); return [c * Math.sin(az * D), c * Math.cos(az * D), Math.sin(el * D)]; }
+function focal() {
+  const fv = 1 / Math.tan(S.fov * D / 2);
+  if (S.cam && video.videoWidth) {
+    const vw = video.videoWidth, vh = video.videoHeight, sc = Math.max(S.W / vw, S.H / vh);
+    return fv * Math.max(vw, vh) / 2 * sc;
+  }
+  return fv * Math.max(S.W, S.H) / 2;
+}
+function screenAngle() { return ((screen.orientation && screen.orientation.angle) ?? window.orientation ?? 0) * D; }
+function projAR(az, el, f, th) {
+  const e = enu(az, el), R = S.R;
+  const vx = R[0] * e[0] + R[3] * e[1] + R[6] * e[2];
+  const vy = R[1] * e[0] + R[4] * e[1] + R[7] * e[2];
+  const vz = R[2] * e[0] + R[5] * e[1] + R[8] * e[2];
+  const xs = vx * Math.cos(th) - vy * Math.sin(th), ys = vx * Math.sin(th) + vy * Math.cos(th);
+  if (vz > -0.05) return { x: 0, y: 0, ok: false, dx: xs, dy: -ys };
+  return { x: S.W / 2 + f * xs / -vz, y: S.H / 2 - f * ys / -vz, ok: true, dx: xs, dy: -ys };
+}
+function mapGeom() { const r = Math.min(S.W, S.H - 230) / 2 - 18; return { cx: S.W / 2, cy: Math.max(r + 70, S.H / 2 - 40), r }; }
+function heading() { if (!S.R || !S.follow) return 0; const R = S.R; return (Math.atan2(R[1], R[4]) / D + 360) % 360; }
+function projMap(az, el, g, hd) {
+  if (el < 0) return { ok: false };
+  const rr = g.r * (90 - el) / 90, a = (az - hd) * D;
+  return { x: g.cx + rr * Math.sin(a), y: g.cy - rr * Math.cos(a), ok: true };
+}
+
+/* ---------- Dessin ---------- */
+const CARD = [['N', 0], ['NE', 45], ['E', 90], ['SE', 135], ['S', 180], ['SO', 225], ['O', 270], ['NO', 315]];
+function colorOf(s) { return s.eye ? '#ffcf5c' : s.lit ? '#8fb8ff' : '#56607a'; }
+function visibleList() { return S.sats.filter(s => s.el > 0 && (!S.onlyVis || s.eye)); }
+
+function draw() {
+  ctx.clearRect(0, 0, S.W, S.H);
+  if (S.mode === 'map' || !S.R) {
+    if (S.mode === 'ar' && !S.R) { ctx.fillStyle = 'rgba(5,7,15,.5)'; ctx.fillRect(0, 0, S.W, S.H); }
+    if (S.mode === 'map') drawMap();
+    else { ctx.fillStyle = '#8a96b3'; ctx.font = '15px system-ui'; ctx.textAlign = 'center'; ctx.fillText('En attente des capteurs d’orientation…', S.W / 2, S.H / 2); }
+    return;
+  }
+  drawAR();
+}
+function line(pts) {
+  ctx.beginPath(); let pen = false;
+  for (const p of pts) { if (!p.ok) { pen = false; continue; } pen ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); pen = true; }
+  ctx.stroke();
+}
+function drawAR() {
+  const f = focal(), th = screenAngle(), P = (a, e) => projAR(a, e, f, th);
+  if (!S.cam || !video.srcObject) { ctx.fillStyle = '#05070f'; ctx.fillRect(0, 0, S.W, S.H); }
+  // grille
+  ctx.lineWidth = 1;
+  for (const el of [0, 30, 60]) {
+    const pts = []; for (let a = 0; a <= 360; a += 3) pts.push(P(a, el));
+    ctx.strokeStyle = el ? 'rgba(143,184,255,.18)' : 'rgba(143,184,255,.55)'; ctx.setLineDash(el ? [4, 6] : []); line(pts);
+  }
+  ctx.setLineDash([2, 6]); ctx.strokeStyle = 'rgba(143,184,255,.14)';
+  for (let a = 0; a < 360; a += 45) { const pts = []; for (let e = 0; e <= 90; e += 5) pts.push(P(a, e)); line(pts); }
+  ctx.setLineDash([]);
+  ctx.font = '600 15px system-ui'; ctx.textAlign = 'center';
+  for (const [n, a] of CARD) { const p = P(a, 0); if (p.ok) { ctx.fillStyle = n === 'N' ? '#ff6b6b' : 'rgba(232,238,252,.85)'; ctx.fillText(n, p.x, p.y - 8); } }
+  ctx.font = '12px system-ui'; ctx.fillStyle = 'rgba(143,184,255,.6)';
+  for (const e of [30, 60]) { const p = P(Math.round(curAz() / 45) * 45, e); if (p.ok) ctx.fillText(e + '°', p.x, p.y - 4); }
+  const z = P(0, 90); if (z.ok) { ctx.fillStyle = 'rgba(143,184,255,.6)'; ctx.fillText('zénith', z.x, z.y + 4); }
+
+  // trajectoire du sélectionné
+  const s0 = S.sel;
+  if (s0) {
+    if (!s0.track || Date.now() - s0.trackAt > 5000) { s0.track = trackOf(s0); s0.trackAt = Date.now(); }
+    ctx.strokeStyle = 'rgba(255,207,92,.55)'; ctx.lineWidth = 2; ctx.setLineDash([6, 6]);
+    line(s0.track.filter(p => p.el > -2).map(p => P(p.az, p.el))); ctx.setLineDash([]);
+  }
+  // satellites
+  const L = visibleList(), many = L.length > 80;
+  let best = null, bd = 70;
+  ctx.textAlign = 'left'; ctx.font = '13px system-ui';
+  for (const s of L) {
+    const p = P(s.az, s.el); s.sx = p.x; s.sy = p.y; s.on = p.ok && p.x > -20 && p.x < S.W + 20 && p.y > -20 && p.y < S.H + 20;
+    if (!s.on) continue;
+    const d = Math.hypot(p.x - S.W / 2, p.y - S.H / 2); if (d < bd) { bd = d; best = s; }
+    const r = s.eye ? 4.5 : 3;
+    ctx.fillStyle = colorOf(s); ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+    if (s.eye) { ctx.fillStyle = 'rgba(255,207,92,.18)'; ctx.beginPath(); ctx.arc(p.x, p.y, 11, 0, 7); ctx.fill(); }
+    if (!many || s.eye) { ctx.fillStyle = 'rgba(232,238,252,.8)'; ctx.fillText(short(s.name), p.x + 8, p.y + 4); }
+  }
+  S.aim = best;
+  // réticule
+  const cx = S.W / 2, cy = S.H / 2;
+  ctx.strokeStyle = best ? '#ffcf5c' : 'rgba(232,238,252,.6)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(cx, cy, 28, 0, 7);
+  for (const [x1, y1, x2, y2] of [[cx - 44, cy, cx - 32, cy], [cx + 32, cy, cx + 44, cy], [cx, cy - 44, cx, cy - 32], [cx, cy + 32, cx, cy + 44]]) { ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); }
+  ctx.stroke();
+  // cible sélectionnée
+  if (s0 && s0.el > -5) {
+    const p = P(s0.az, s0.el);
+    if (p.ok && p.x > 0 && p.x < S.W && p.y > 0 && p.y < S.H) {
+      ctx.strokeStyle = '#ffcf5c'; ctx.lineWidth = 2; ctx.strokeRect(p.x - 14, p.y - 14, 28, 28);
+      ctx.fillStyle = '#ffcf5c'; ctx.font = '600 14px system-ui'; ctx.fillText(short(s0.name), p.x + 18, p.y - 10);
+    } else arrow(p.dx, p.dy, s0);
+  }
+  // cap actuel
+  ctx.fillStyle = 'rgba(232,238,252,.75)'; ctx.font = '13px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText(`Visée ${Math.round(curAz())}° · hauteur ${Math.round(curEl())}°`, cx, cy + 66);
+  renderCard();
+}
+function curDir() { const R = S.R; return [-R[2], -R[5], -R[8]]; }
+function curAz() { const d = curDir(); return (Math.atan2(d[0], d[1]) / D + 360) % 360; }
+function curEl() { return Math.asin(Math.max(-1, Math.min(1, curDir()[2]))) / D; }
+function arrow(dx, dy, s) {
+  const a = Math.atan2(dy, dx), m = 70, cx = S.W / 2, cy = S.H / 2;
+  const t = Math.min((S.W / 2 - m) / Math.abs(Math.cos(a) || 1e-6), (S.H / 2 - 150) / Math.abs(Math.sin(a) || 1e-6));
+  const x = cx + Math.cos(a) * t, y = cy + Math.sin(a) * t;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(a);
+  ctx.fillStyle = '#ffcf5c'; ctx.beginPath(); ctx.moveTo(18, 0); ctx.lineTo(-10, -12); ctx.lineTo(-4, 0); ctx.lineTo(-10, 12); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = '#ffcf5c'; ctx.font = '600 13px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText(s.el < 0 ? short(s.name) + ' (sous l’horizon)' : short(s.name), x, y + (Math.sin(a) > 0 ? -22 : 30));
+}
+function drawMap() {
+  const g = mapGeom(), hd = heading(), P = (a, e) => projMap(a, e, g, hd);
+  ctx.fillStyle = '#05070f'; ctx.fillRect(0, 0, S.W, S.H);
+  const grd = ctx.createRadialGradient(g.cx, g.cy, 0, g.cx, g.cy, g.r);
+  grd.addColorStop(0, S.sunEl > 0 ? '#1c3260' : '#101833'); grd.addColorStop(1, '#070b18');
+  ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(g.cx, g.cy, g.r, 0, 7); ctx.fill();
+  ctx.strokeStyle = 'rgba(143,184,255,.5)'; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.strokeStyle = 'rgba(143,184,255,.16)'; ctx.setLineDash([4, 6]);
+  for (const e of [30, 60]) { ctx.beginPath(); ctx.arc(g.cx, g.cy, g.r * (90 - e) / 90, 0, 7); ctx.stroke(); }
+  for (let a = 0; a < 180; a += 45) { const p = P(a, 0), q = P(a + 180, 0); ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
+  ctx.setLineDash([]);
+  ctx.font = '600 15px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const [n, a] of CARD) {
+    const rr = g.r + 12, an = (a - hd) * D;
+    if (n.length > 1) continue;
+    ctx.fillStyle = n === 'N' ? '#ff6b6b' : 'rgba(232,238,252,.85)';
+    ctx.fillText(n, g.cx + rr * Math.sin(an), g.cy - rr * Math.cos(an));
+  }
+  ctx.textBaseline = 'alphabetic';
+  const s0 = S.sel;
+  if (s0) {
+    if (!s0.track || Date.now() - s0.trackAt > 5000) { s0.track = trackOf(s0, 12, 20); s0.trackAt = Date.now(); }
+    ctx.strokeStyle = 'rgba(255,207,92,.6)'; ctx.lineWidth = 2; ctx.setLineDash([6, 6]);
+    line(s0.track.map(p => P(p.az, p.el))); ctx.setLineDash([]);
+  }
+  const L = visibleList(), many = L.length > 80;
+  ctx.textAlign = 'left'; ctx.font = '12px system-ui';
+  for (const s of L) {
+    const p = P(s.az, s.el); s.sx = p.x; s.sy = p.y; s.on = true;
+    ctx.fillStyle = colorOf(s); ctx.beginPath(); ctx.arc(p.x, p.y, s.eye ? 4 : 2.6, 0, 7); ctx.fill();
+    if (!many || s.eye || s === s0) { ctx.fillStyle = 'rgba(232,238,252,.75)'; ctx.fillText(short(s.name), p.x + 7, p.y + 4); }
+  }
+  if (s0 && s0.el > 0) { const p = P(s0.az, s0.el); ctx.strokeStyle = '#ffcf5c'; ctx.lineWidth = 2; ctx.strokeRect(p.x - 12, p.y - 12, 24, 24); }
+  S.aim = null;
+  ctx.fillStyle = 'rgba(138,150,179,.9)'; ctx.font = '12px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText(S.R && S.follow ? 'Carte tournée selon ta boussole' : 'Nord en haut', g.cx, g.cy + g.r + 34);
+  renderCard();
+}
+function short(n) { return n.replace(/\s*\(.*?\)\s*/g, ' ').trim().slice(0, 22); }
+
+/* ---------- Carte d'info ---------- */
+let lastCard = '';
+function renderCard() {
+  const s = S.sel || S.aim, c = $('#card');
+  if (!s) { if (lastCard) { c.className = ''; c.innerHTML = ''; lastCard = ''; } return; }
+  const tag = s.el < 0 ? '<span class="tag s">sous l’horizon</span>' : s.eye ? '<span class="tag v">visible à l’œil nu</span>' : s.lit ? '<span class="tag l">éclairé, ciel trop clair</span>' : '<span class="tag s">dans l’ombre de la Terre</span>';
+  const html = `<h2><span>${esc(s.name)}</span><small>${S.sel ? 'suivi' : 'dans le viseur'} · #${s.id}</small></h2>${tag}
+  <div class="g" style="margin-top:6px"><div>Hauteur<b>${s.el.toFixed(0)}°</b></div><div>Direction<b>${s.az.toFixed(0)}° ${dir(s.az)}</b></div><div>Distance<b>${s.range ? Math.round(s.range).toLocaleString('fr') + ' km' : '—'}</b></div>
+  <div>Altitude<b>${s.alt ? Math.round(s.alt).toLocaleString('fr') + ' km' : '—'}</b></div><div>Vitesse<b>${s.speed ? s.speed.toFixed(1) + ' km/s' : '—'}</b></div><div>Prochain<b>${S.sel && s.el < 0 ? nextPass(s) : '—'}</b></div></div>`;
+  if (html !== lastCard) { c.innerHTML = html; c.className = 'show'; lastCard = html; }
+}
+function dir(a) { return CARD[Math.round(a / 45) % 8][0]; }
+function esc(t) { return t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function nextPass(s) {
+  if (s._np && Date.now() - s._npAt < 60000) return s._np;
+  const o = { latitude: S.obs.lat * D, longitude: S.obs.lon * D, height: S.obs.h }, t0 = Date.now();
+  let r = '> 24 h';
+  for (let t = 30; t < 86400; t += 30) {
+    const d = new Date(t0 + t * 1000), pv = satellite.propagate(s.rec, d);
+    if (!pv || !pv.position) continue;
+    if (satellite.ecfToLookAngles(o, satellite.eciToEcf(pv.position, satellite.gstime(d))).elevation > 0) { r = d.toLocaleTimeString('fr', { hour: '2-digit', minute: '2-digit' }); break; }
+  }
+  s._np = r; s._npAt = Date.now(); return r;
+}
+
+/* ---------- Liste ---------- */
+function openSheet(id) { document.querySelectorAll('.sheet').forEach(x => x.classList.toggle('open', x.id === id)); if (id === 'sheetList') renderList(); }
+function closeSheets() { document.querySelectorAll('.sheet').forEach(x => x.classList.remove('open')); }
+function renderList() {
+  const q = $('#q').value.trim().toLowerCase();
+  let L = q ? S.sats.filter(s => s.name.toLowerCase().includes(q) || s.id === q) : visibleList();
+  L = L.slice().sort((a, b) => (b.eye - a.eye) || (b.el - a.el)).slice(0, 150);
+  $('#list').innerHTML = L.length ? L.map(s => `<li data-id="${s.id}"><i class="dot" style="background:${s.el > 0 ? colorOf(s) : '#333a4d'}"></i><span>${esc(s.name)}</span><em>${s.el > 0 ? `${s.el.toFixed(0)}° ${dir(s.az)}` : 'sous l’horizon'}</em></li>`).join('')
+    : '<li><span style="color:var(--dim)">Aucun satellite pour l’instant.</span></li>';
+}
+$('#list').addEventListener('click', e => {
+  const li = e.target.closest('li[data-id]'); if (!li) return;
+  S.sel = S.sats.find(s => s.id === li.dataset.id) || null; if (S.sel) S.sel.track = null;
+  $('#bClear').textContent = 'Lâcher'; closeSheets();
+});
+$('#q').addEventListener('input', renderList);
+document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSheets));
+
+/* ---------- Interactions ---------- */
+cv.addEventListener('click', e => {
+  if (document.querySelector('.sheet.open')) { closeSheets(); return; }
+  let best = null, bd = 34;
+  for (const s of S.sats) if (s.on && s.el > 0) { const d = Math.hypot(s.sx - e.clientX, s.sy - e.clientY); if (d < bd) { bd = d; best = s; } }
+  if (best) { S.sel = best; best.track = null; $('#bClear').textContent = 'Lâcher'; }
+});
+$('#bClear').onclick = () => {
+  if (S.sel) { S.sel = null; $('#bClear').textContent = 'Viser'; }
+  else if (S.aim) { S.sel = S.aim; S.sel.track = null; $('#bClear').textContent = 'Lâcher'; }
+  else toast('Place un satellite dans le cercle, ou touche-le.');
+};
+$('#bList').onclick = () => openSheet('sheetList');
+$('#bSet').onclick = () => openSheet('settings');
+$('#bMode').onclick = () => setMode(S.mode === 'ar' ? 'map' : 'ar');
+function setMode(m) {
+  S.mode = m; document.body.classList.toggle('map', m === 'map');
+  $('#bMode').textContent = m === 'ar' ? 'Carte' : 'Visée';
+  if (m === 'ar' && S.cam && !video.srcObject) startCamera();
+}
+$('#group').value = S.group;
+$('#group').onchange = e => { if (e.target.value === 'active') toast('≈ 10 000 satellites : le calcul peut ralentir le téléphone.'); loadGroup(e.target.value); };
+const rOff = $('#rOff'), rFov = $('#rFov');
+rOff.value = S.off; $('#oOff').textContent = S.off + '°';
+rFov.value = S.fov; $('#oFov').textContent = S.fov + '°';
+rOff.oninput = () => { S.off = +rOff.value; $('#oOff').textContent = S.off + '°'; ls.set('off', S.off); S.R = null; };
+rFov.oninput = () => { S.fov = +rFov.value; $('#oFov').textContent = S.fov + '°'; ls.set('fov', S.fov); };
+$('#cVis').checked = S.onlyVis; $('#cVis').onchange = e => { S.onlyVis = e.target.checked; ls.set('onlyVis', S.onlyVis); };
+$('#cCam').checked = S.cam; $('#cCam').onchange = e => { S.cam = e.target.checked; ls.set('cam', S.cam); S.cam ? startCamera() : stopCamera(); };
+$('#bLoc').onclick = () => locate(false);
+showPos();
+
+async function start(mode) {
+  $('#start').style.display = 'none';
+  try { screen.orientation?.lock?.('portrait').catch(() => {}); } catch {}
+  await askOrientation();
+  setMode(mode);
+  locate(true);
+  setTimeout(() => { if (!S.R && S.mode === 'ar') { toast('Pas de boussole détectée : affichage en carte.'); setMode('map'); } }, 4000);
+}
+$('#go').onclick = () => start('ar');
+$('#goMap').onclick = () => start('map');
+
+/* ---------- Boucle ---------- */
+function loop(t) {
+  if (!S.loading && S.sats.length) {
+    const every = S.sats.length > 3000 ? 3000 : 1000;
+    if (t - S.lastCalc > every) { compute(); S.lastCalc = t; if ($('#sheetList').classList.contains('open') && !$('#q').value) renderList(); }
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+loadGroup(S.group).then(() => requestAnimationFrame(loop));
+
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+</script>
+</body>
+</html>
