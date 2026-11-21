@@ -29,3 +29,19 @@ test('Mars : globe affiché, altitudes MOLA exactes, descente au zoom', async ({
   await expect(page.locator('#hAlt')).toContainText('km');
   expect(errors).toEqual([]);
 });
+
+test('Menu : on passe des satellites à Mars et retour', async ({ page }) => {
+  await page.route('https://**', r => r.abort());
+  await page.goto('/index.html');
+  await page.getByRole('button', { name: 'Menu' }).click();
+  await expect(page.getByRole('link', { name: /Satellites/ })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('link', { name: /Mars en 3D/ }).click();
+  await expect(page).toHaveURL(/\/mars\/$/);
+  await page.getByRole('button', { name: 'Menu' }).click();
+  await expect(page.getByRole('link', { name: /Mars en 3D/ })).toHaveAttribute('aria-current', 'page');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('link', { name: /Satellites/ })).toBeHidden();
+  await page.getByRole('button', { name: 'Menu' }).click();
+  await page.getByRole('link', { name: /Satellites/ }).click();
+  await expect(page.locator('#start')).toBeVisible();
+});

@@ -25,10 +25,8 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1
 .lb::before{content:"";position:absolute;left:-3px;top:50%;width:5px;height:5px;margin-top:-3px;border-radius:50%;border:1px solid var(--ice)}
 .lb.site{color:var(--amber)}.lb.site::before{border-color:var(--amber)}
 .lb:hover{color:#fff}
-#top{position:fixed;left:0;top:0;padding:calc(var(--st) + 10px) 14px;display:flex;gap:12px;align-items:baseline;pointer-events:none}
+#top{position:fixed;left:68px;top:calc(var(--st) + 8px);height:44px;display:flex;align-items:center;pointer-events:none}
 #top h1{margin:0;font-size:17px;font-weight:600;letter-spacing:.14em;text-transform:uppercase}
-#top a{color:var(--dim);font-size:13px;text-decoration:none;pointer-events:auto}
-#top a:hover{color:var(--ink)}
 #hud{position:fixed;left:14px;bottom:calc(var(--sb) + 30px);display:grid;grid-template-columns:auto auto;gap:1px 12px;font-size:13px;pointer-events:none;text-shadow:0 0 4px #000,0 0 2px #000}
 #hud dt{color:var(--dim)}
 #hud dd{margin:0;color:var(--amber);font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -61,7 +59,7 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 <canvas id="cv" tabindex="0" aria-label="Mars en 3D. Glisser pour tourner, molette ou pincement pour zoomer."></canvas>
 <div id="labels"></div>
 
-<div id="top"><h1>Mars</h1><a href="../">SatSky</a></div>
+<div id="top"><h1>Mars</h1></div>
 
 <dl id="hud">
   <dt>Altitude</dt><dd id="hAlt">–</dd>
@@ -92,6 +90,7 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 
 <div id="load"><p id="loadMsg">Mars arrive…</p><div id="bar"><i></i></div></div>
 
+<script src="../menu.js" data-page="mars" data-root="../"></script>
 <script type="module" src="mars.js"></script>
 </body>
 </html>
