@@ -230,18 +230,63 @@ async function cachedText(url, maxAge, cacheName = 'tle-v1') {
   } catch (e) { if (hit) return hit.text(); throw e; }
 }
 const parseTLE = txt => Core.parseTLE(txt, satellite.twoline2satrec);
-async function loadGroup(g) {
-  S.loading = true; $('#stat').textContent = 'Chargement des orbites…';
-  try {
-    const txt = await cachedText(`https://celestrak.org/NORAD/elements/gp.php?GROUP=${g}&FORMAT=tle`, 6 * 3600e3);
-    if (!/\n1 /.test(txt)) throw new Error('vide');
-    S.sats = parseTLE(txt); unlock(true); S.group = g; ls.set('group', g);
-    compute(); S.lastCalc = performance.now();
-  } catch {
-    $('#stat').textContent = 'Erreur de chargement';
-    toast('Impossible de récupérer les orbites (CelesTrak). Réessaie dans un moment.');
+/* Orbites : miroir GitHub (mis à jour toutes les 4 h par une GitHub Action), CelesTrak en secours, puis le cache.
+   CelesTrak limite les gros groupes (Starlink, Active) : un téléchargement par téléphone finissait en HTTP 403. */
+const MIRROR = (() => {
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = location.pathname.split('/')[1];
+  return `https://raw.githubusercontent.com/${m ? m[1] : 'ThomasPoum'}/${m && repo ? repo : 'satsky'}/data/`;
+})();
+async function fetchWithTimeout(url, ms) {
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), ms);
+  try { return await fetch(url, { signal: ctl.signal }); } finally { clearTimeout(to); }
+}
+async function getTLE(g, onStep) {
+  const key = new URL(`__tle/${g}`, location.href).href;
+  let cache = null, hit = null;
+  try { cache = await caches.open('tle-v2'); hit = await cache.match(key); } catch {}
+  if (hit && Date.now() - +hit.headers.get('x-t') < 3 * 3600e3) return hit.text();
+  for (const [url, label, ms] of [[MIRROR + g + '.tle', 'miroir', 20000], [`https://celestrak.org/NORAD/elements/gp.php?GROUP=${g}&FORMAT=tle`, 'CelesTrak', 25000]]) {
+    try {
+      onStep?.(`Téléchargement (${label})…`);
+      const r = await fetchWithTimeout(url, ms), txt = await r.text();
+      if (!r.ok || !/\n1 /.test(txt)) throw new Error(r.status);
+      cache?.put(key, new Response(txt, { headers: { 'x-t': String(Date.now()) } })).catch(() => {});
+      return txt;
+    } catch {}
   }
-  S.loading = false;
+  if (hit) { toast('Réseau indisponible : orbites en cache utilisées.'); return hit.text(); }
+  throw new Error('indisponible');
+}
+/* préparation par tranches : l'écran ne gèle pas pendant les ~9 000 satellites de Starlink */
+async function parseChunked(txt, onStep) {
+  const L = txt.split(/\r?\n/), out = [], CH = 3000;
+  for (let i = 0; i < L.length;) {
+    let j = Math.min(L.length, i + CH);
+    while (j < L.length && /^[12] /.test(L[j])) j++;
+    out.push(...parseTLE(L.slice(i, j).join('\n')));
+    i = j;
+    if (i < L.length) { onStep?.(`Préparation… ${Math.round(i / L.length * 100)} %`); await new Promise(r => setTimeout(r)); }
+  }
+  return out;
+}
+let loadToken = 0;
+async function loadGroup(g) {
+  const token = ++loadToken, step = t => { if (token === loadToken) $('#stat').textContent = t; };
+  S.loading = true; step('Chargement des orbites…');
+  try {
+    const txt = await getTLE(g, step);
+    const sats = await parseChunked(txt, step);
+    if (token !== loadToken) return;
+    if (!sats.length) throw new Error('vide');
+    unlock(true); S.fade = null; S.aim = null; S.cc = null;
+    S.sats = sats; S.group = g; ls.set('group', g);
+    computeBegin(); step(`Calcul de ${fmtN(sats.length)} satellites…`);
+  } catch {
+    if (token !== loadToken) return;
+    step('Erreur de chargement');
+    toast('Impossible de récupérer les orbites pour l’instant. Réessaie dans un moment.');
+  }
+  if (token === loadToken) S.loading = false;
 }
 async function wikiSummary(title, lang = 'fr') {
   const j = JSON.parse(await cachedText(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`, 30 * 864e5, 'ctx-v1'));
@@ -277,28 +322,36 @@ function loadContext(s) {
 }
 
 /* ---------- Orbite, Soleil, passages ---------- */
-function compute() {
-  const now = new Date(), gmst = satellite.gstime(now), o = OBS();
-  const sun = sunEci(now), sl = Math.hypot(sun.x, sun.y, sun.z), su = { x: sun.x / sl, y: sun.y / sl, z: sun.z / sl };
+/* calcul étalé sur plusieurs images : quelques millisecondes par image, jamais de gel */
+function makeCtx() {
+  const now = new Date(), gmst = satellite.gstime(now), o = OBS(), sun = sunEci(now);
   S.sunEl = satellite.ecfToLookAngles(o, satellite.eciToEcf(sun, gmst)).elevation / D;
-  const dark = S.sunEl < -6;
-  let up = 0, vis = 0;
-  for (const s of S.sats) {
-    const pv = satellite.propagate(s.rec, now);
-    if (!pv || !pv.position || isNaN(pv.position.x)) { s.el = -90; continue; }
-    const p = pv.position, la = satellite.ecfToLookAngles(o, satellite.eciToEcf(p, gmst));
-    s.pAz = s.az; s.pEl = s.el; s.pT = s.t; s.t = +now;
-    s.el = la.elevation / D; s.az = la.azimuth / D; s.range = la.rangeSat;
-    if (s.el < 0 && s !== S.sel) continue;
-    s.lit = Core.sunlit(p, sun);
-    s.eye = s.lit && dark && s.el > 0;
-    s.speed = Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z);
-    s.alt = Math.hypot(p.x, p.y, p.z) - RE;
-    if (s.el > 0) { up++; if (s.eye) vis++; }
-  }
-  const sky = S.sunEl > 0 ? 'jour' : S.sunEl > -6 ? 'crépuscule' : 'nuit';
-  $('#stat').innerHTML = `${up} au-dessus · <b>${vis} visibles</b> · ${sky}`;
+  return { i: 0, now, gmst, o, sun, dark: S.sunEl < -6, up: 0, vis: 0, start: performance.now() };
 }
+function computeBegin() { S.cc = makeCtx(); }
+function computeSat(s, c) {
+  const pv = satellite.propagate(s.rec, c.now);
+  if (!pv || !pv.position || isNaN(pv.position.x)) { s.el = -90; return; }
+  const p = pv.position, la = satellite.ecfToLookAngles(c.o, satellite.eciToEcf(p, c.gmst));
+  s.pAz = s.az; s.pEl = s.el; s.pT = s.t; s.t = +c.now;
+  s.el = la.elevation / D; s.az = la.azimuth / D; s.range = la.rangeSat;
+  if (s.el < 0 && s !== S.sel) return;
+  s.lit = Core.sunlit(p, c.sun);
+  s.eye = s.lit && c.dark && s.el > 0;
+  s.speed = Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z);
+  s.alt = Math.hypot(p.x, p.y, p.z) - RE;
+  if (s.el > 0) { c.up++; if (s.eye) c.vis++; }
+}
+function computeStep(budgetMs) {
+  if (!S.cc) computeBegin();
+  const c = S.cc, L = S.sats, end = performance.now() + budgetMs;
+  while (c.i < L.length) { computeSat(L[c.i++], c); if ((c.i & 63) === 0 && performance.now() > end) return false; }
+  const sky = S.sunEl > 0 ? 'jour' : S.sunEl > -6 ? 'crépuscule' : 'nuit';
+  $('#stat').innerHTML = `${c.up} au-dessus · <b>${c.vis} visibles</b> · ${sky}`;
+  S.cc = null; S.lastCalc = c.start;
+  return true;
+}
+function compute() { computeBegin(); computeStep(Infinity); }
 /* position extrapolée entre deux calculs, pour un mouvement fluide à 60 i/s */
 function skyPos(s, now) {
   if (s.pT == null || s.pEl < -80) return s;
@@ -405,7 +458,7 @@ function locate(silent) {
   if (!navigator.geolocation) return;
   navigator.geolocation.getCurrentPosition(p => {
     S.obs = { lat: p.coords.latitude, lon: p.coords.longitude, h: (p.coords.altitude || 35) / 1000, src: 'GPS' };
-    ls.set('obs', S.obs); showPos(); compute(); if (S.sel) S.sel.pass = null;
+    ls.set('obs', S.obs); showPos(); S.cc = null; S.lastCalc = 0; if (S.sel) { S.sel.pass = null; S.sel.orbit = null; }
     if (!silent) toast('Position mise à jour');
   }, () => toast(`Position refusée : ${S.obs.src} utilisé.`), { enableHighAccuracy: true, timeout: 15000, maximumAge: 600000 });
 }
@@ -435,16 +488,18 @@ function projMap(az, el, g, hd) {
 /* ---------- Verrouillage ---------- */
 function lock(s) {
   if (!s) return;
-  S.sel = s; s.pass = null; S.lockAt = performance.now(); S.aimId = null;
+  if (S.sel && S.sel !== s) unlock(true);
+  S.sel = s; s.pass = null; S.lockAt = s.lockAt = performance.now(); S.aimId = null;
   s.lockFrom = (s.sx != null && s.on) ? { x: s.sx, y: s.sy } : { x: S.W / 2, y: S.H / 2 };
   try { navigator.vibrate?.([25, 40, 25]); } catch {}
-  loadContext(s); compute();
+  loadContext(s); computeSat(s, makeCtx());
   $('#bClear').textContent = 'Lâcher'; $('#bClear').classList.add('locked');
   const c = $('#card'); c.classList.remove('flash'); void c.offsetWidth; c.classList.add('flash');
   lastCard = '';
 }
 function unlock(silent) {
   if (S.sel && !silent) S.ignoreId = S.sel.id;
+  if (S.sel) S.fade = { s: S.sel, t0: performance.now() }; /* trajectoire et crochets s'effacent en fondu */
   S.sel = null; S.aimId = null;
   $('#bClear').textContent = 'Verrouiller'; $('#bClear').classList.remove('locked');
   if ($('#fiche').classList.contains('open')) closeSheets();
@@ -477,10 +532,44 @@ function pill(text, x, y, col = '#ffcf5c', alpha = 1) {
   ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y - 10, w, 20, 10) : ctx.rect(x, y - 10, w, 20); ctx.fill(); ctx.stroke();
   ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.fillText(text, x + 7, y + 4); ctx.restore();
 }
+/* orbite complète projetée dans le ciel (un tour, rotation de la Terre comprise) */
+function orbitTrack(s) {
+  const now = Date.now();
+  if (s.orbit && now - s.orbit.at < 10000) return s.orbit;
+  const per = Math.min(1440, 2 * Math.PI / s.rec.no) * 60000, N = 240, pts = [];
+  for (let k = 0; k <= N; k++) { const p = lookAt(s, now + k / N * per); if (p) pts.push(p); }
+  return (s.orbit = { at: now, pts });
+}
+function drawOrbit(P, s, now, pa = 1) {
+  const o = orbitTrack(s), r = ease((performance.now() - s.lockAt - 500) / 1600);
+  if (r <= 0) return;
+  const n = Math.max(2, Math.floor(r * o.pts.length)), pp = o.pts.slice(0, n).map(p => ({ ...P(p.az, p.el), up: p.el >= 0 }));
+  ctx.save(); ctx.globalAlpha = pa; ctx.lineCap = 'round';
+  // deux passes : au-dessus de l'horizon (ambre), sous l'horizon (pointillés bleus, « à travers le sol »)
+  for (const up of [false, true]) {
+    ctx.beginPath(); let pen = false;
+    for (let i = 1; i < pp.length; i++) {
+      const a = pp[i - 1], b = pp[i];
+      if (!a.ok || !b.ok || (a.up && b.up) !== up || Math.hypot(b.x - a.x, b.y - a.y) > S.W) { pen = false; continue; }
+      if (!pen) ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); pen = true;
+    }
+    ctx.setLineDash(up ? [] : [4, 7]); ctx.lineWidth = up ? 1.6 : 1.3;
+    ctx.strokeStyle = up ? 'rgba(255,207,92,.55)' : 'rgba(143,184,255,.45)'; ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  // étiquette discrète au point le plus haut de l'orbite visible à l'écran, une fois le tracé fini
+  if (r >= 1) {
+    const vis = pp.filter(p => p.ok && p.x > 30 && p.x < S.W - 120 && p.y > 90 && p.y < S.H - 260);
+    const lab = vis.find((p, i) => i > 25 && !p.up);
+    if (lab) { ctx.fillStyle = 'rgba(143,184,255,.75)'; ctx.font = '12px system-ui'; ctx.textAlign = 'left'; ctx.fillText('orbite sous l\u2019horizon', lab.x + 8, lab.y - 6); }
+  }
+  ctx.restore();
+}
 /* trajectoire du passage, révélée progressivement depuis la position actuelle */
-function drawPass(P, s, now) {
+function drawPass(P, s, now, pa = 1) {
   const pass = ensurePass(s); if (!pass || !pass.pts) return;
-  const e = ease((performance.now() - S.lockAt) / 1100);
+  const e = ease((performance.now() - s.lockAt) / 1100);
+  ctx.save(); ctx.globalAlpha = pa;
   const past = pass.pts.filter(p => p.t <= now), fut = pass.pts.filter(p => p.t > now);
   const cur = lookAt(s, now);
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -506,12 +595,13 @@ function drawPass(P, s, now) {
       ctx.fillStyle = 'rgba(255,230,170,.95)'; ctx.fillText(mm <= 30 ? `+${mm} min` : fmtT(seg[i].t), lx, ly); lastLab = { x: lx, y: ly };
     }
   }
-  const late = ease((performance.now() - S.lockAt - 900) / 500);
+  const late = ease((performance.now() - s.lockAt - 900) / 500) * pa;
   if (late > 0) {
-    if (pass.max && pass.max.t > now + 45e3) { const p = P(pass.max.az, pass.max.el); if (p.ok) { ctx.globalAlpha = late; ctx.fillStyle = '#ffcf5c'; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 7); ctx.fill(); ctx.globalAlpha = 1; pill(`max ${Math.round(pass.max.el)}° · ${fmtT(pass.max.t)}`, p.x + 10, p.y - 12, '#ffcf5c', late); } }
+    if (pass.max && pass.max.t > now + 45e3) { const p = P(pass.max.az, pass.max.el); if (p.ok) { ctx.globalAlpha = late; ctx.fillStyle = '#ffcf5c'; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 7); ctx.fill(); ctx.globalAlpha = pa; pill(`max ${Math.round(pass.max.el)}° · ${fmtT(pass.max.t)}`, p.x + 10, p.y - 12, '#ffcf5c', late); } }
     if (pass.set) { const p = P(pass.set.az, 0); if (p.ok) pill(`coucher ${fmtT(pass.set.t)}`, p.x + 8, p.y - 16, '#8fb8ff', late); }
     if (pass.rise && pass.rise.t > now) { const p = P(pass.rise.az, 0); if (p.ok) pill(`lever ${fmtT(pass.rise.t)}`, p.x + 8, p.y - 16, '#8fb8ff', late); }
   }
+  ctx.restore();
 }
 function drawSats(P, opts) {
   const L = visibleList(), many = L.length > 80;
@@ -532,22 +622,48 @@ function drawSats(P, opts) {
   return best;
 }
 /* cible verrouillée : crochets qui se referment + onde */
-function drawLocked(s, p) {
-  const t = (performance.now() - S.lockAt) / 450, e = ease(t);
+function drawLocked(s, p, pa = 1, P = null) {
+  ctx.save(); ctx.globalAlpha = pa;
+  const t = (performance.now() - s.lockAt) / 450, e = ease(t);
+  // flèche de direction : où va le satellite dans les 20 prochaines secondes
+  if (P) {
+    const nx = lookAt(s, Date.now() + 20000), q = nx && P(nx.az, nx.el);
+    if (q && q.ok && Math.hypot(q.x - p.x, q.y - p.y) > 0.5) {
+      const ang = Math.atan2(q.y - p.y, q.x - p.x), g = ease((performance.now() - s.lockAt - 300) / 500), L = 18 + 42 * g;
+      ctx.strokeStyle = '#ffcf5c'; ctx.fillStyle = '#ffcf5c'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(p.x + Math.cos(ang) * 20, p.y + Math.sin(ang) * 20); ctx.lineTo(p.x + Math.cos(ang) * L, p.y + Math.sin(ang) * L); ctx.stroke();
+      if (g > 0.2) {
+        const hx = p.x + Math.cos(ang) * (L + 8), hy = p.y + Math.sin(ang) * (L + 8);
+        ctx.save(); ctx.translate(hx, hy); ctx.rotate(ang); ctx.beginPath(); ctx.moveTo(6, 0); ctx.lineTo(-8, -8); ctx.lineTo(-8, 8); ctx.closePath(); ctx.fill(); ctx.restore();
+        const far = lookAt(s, Date.now() + 90000);
+        if (far && g >= 1) { ctx.font = '600 12px system-ui'; ctx.textAlign = 'center'; ctx.fillText('vers ' + dir(far.az), hx + Math.cos(ang) * 22, hy + Math.sin(ang) * 22 + 4); }
+      }
+    }
+  }
   const from = s.lockFrom || { x: p.x, y: p.y };
   const x = from.x + (p.x - from.x) * e, y = from.y + (p.y - from.y) * e;
   const h = 40 - 26 * e + (t > 0.6 && t < 1.2 && !RM ? Math.sin((t - 0.6) * 10) * 2 : 0);
   if (t < 1.6 && !RM) { const w = Math.min(1, t / 1.6); ctx.strokeStyle = `rgba(255,207,92,${1 - w})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, 14 + 70 * w, 0, 7); ctx.stroke(); }
   ctx.fillStyle = '#ffcf5c'; ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, 7); ctx.fill();
   brackets(x, y, h, '#ffcf5c', 2.2);
-  const a = ease((performance.now() - S.lockAt - 250) / 400);
-  if (a > 0) { ctx.globalAlpha = a; ctx.fillStyle = '#ffcf5c'; ctx.font = '600 14px system-ui'; ctx.textAlign = 'left'; ctx.fillText(short(s.name), p.x + 22, p.y - 8); ctx.font = '12px system-ui'; ctx.fillStyle = 'rgba(255,230,170,.9)'; ctx.fillText('Verrouillé', p.x + 22, p.y + 8); ctx.globalAlpha = 1; }
+  const a = ease((performance.now() - s.lockAt - 250) / 400) * pa;
+  if (a > 0) { ctx.globalAlpha = a; ctx.fillStyle = '#ffcf5c'; ctx.font = '600 14px system-ui'; ctx.textAlign = 'left'; ctx.fillText(short(s.name), p.x + 22, p.y - 8); ctx.font = '12px system-ui'; ctx.fillStyle = 'rgba(255,230,170,.9)'; ctx.fillText('Verrouillé', p.x + 22, p.y + 8); }
+  ctx.restore();
 }
 function draw() {
   ctx.clearRect(0, 0, S.W, S.H);
   if (S.mode === 'map') return drawMap();
   if (!S.R) { ctx.fillStyle = 'rgba(5,7,15,.6)'; ctx.fillRect(0, 0, S.W, S.H); ctx.fillStyle = '#8a96b3'; ctx.font = '15px system-ui'; ctx.textAlign = 'center'; ctx.fillText('En attente des capteurs d’orientation…', S.W / 2, S.H / 2); S.aim = null; renderCard(); return; }
   drawAR();
+}
+/* ancienne cible : sa trajectoire et ses crochets s'effacent en 350 ms */
+function drawFade(P, now) {
+  const f = S.fade; if (!f) return;
+  const k = 1 - (performance.now() - f.t0) / 350;
+  if (k <= 0 || RM || f.s === S.sel) { S.fade = null; return; }
+  drawOrbit(P, f.s, now, k); drawPass(P, f.s, now, k);
+  const q = skyPos(f.s, now), p = P(q.az, q.el);
+  if (p.ok) { ctx.save(); ctx.globalAlpha = k; brackets(p.x, p.y, 14 + 18 * (1 - k), '#ffcf5c', 2); ctx.restore(); }
 }
 function drawAR() {
   const f = focal(), th = screenAngle(), P = (a, e) => projAR(a, e, f, th), now = Date.now(), tp = performance.now();
@@ -562,42 +678,52 @@ function drawAR() {
   ctx.font = '12px system-ui'; ctx.fillStyle = 'rgba(143,184,255,.6)';
   for (const e of [30, 60]) { const p = P(Math.round(curAz() / 45) * 45, e); if (p.ok) ctx.fillText(e + '°', p.x, p.y - 4); }
 
-  const s0 = S.sel;
-  if (s0) { const q = lookAt(s0, now); if (q) { s0.az = q.az; s0.el = q.el; } drawPass(P, s0, now); }
-  let best = drawSats(P, { aimRadius: s0 ? 0 : 60 });
-  // visée « aimantée » : on garde la cible tant qu'elle reste proche du centre
+  drawFade(P, now);
+  let s0 = S.sel;
+  if (s0) { const q = lookAt(s0, now); if (q) { s0.az = q.az; s0.el = q.el; } drawOrbit(P, s0, now); drawPass(P, s0, now); }
+  let best = drawSats(P, { aimRadius: 60 });
   const dC = s => Math.hypot(s.sx - S.W / 2, s.sy - S.H / 2), prev = S.aim;
-  if (!s0 && prev && prev.on && prev.el > 0 && dC(prev) < 90 && (!best || dC(best) > dC(prev) - 15)) best = prev;
+  // visée « aimantée » : on garde la cible tant qu'elle reste proche du centre
+  if (prev && prev !== s0 && prev.on && prev.el > 0 && dC(prev) < 90 && (!best || dC(best) > dC(prev) - 15)) best = prev;
+  // la cible verrouillée elle-même n'est pas un candidat, et elle a la priorité si elle est au centre
+  if (best === s0) best = null;
+  if (best && s0 && s0.on && dC(s0) <= dC(best)) best = null;
   S.aim = best;
   if (best) S.aimSeen = tp;
   const cx = S.W / 2, cy = S.H / 2;
 
-  // verrouillage automatique
+  // verrouillage automatique ; viser un autre satellite libère le précédent
   let prog = 0;
-  if (!s0) {
-    if (!best || best.id !== S.ignoreId) S.ignoreId = null;
-    if (best && best.id !== S.ignoreId) {
-      if (S.aimId !== best.id) { S.aimId = best.id; S.aimSince = tp; }
-      prog = Math.min(1, (tp - S.aimSince) / LOCK_MS);
-      if (S.auto && prog >= 1) lock(best);
-    } else if (!best && S.aimId && tp - S.aimSeen < 400) {
-      S.aimSince += S.frameDt * 1000; /* perte brève (tremblement) : on met en pause au lieu de repartir de zéro */
-    } else S.aimId = null;
-  }
+  if (!best || best.id !== S.ignoreId) S.ignoreId = null;
+  if (best && best.id !== S.ignoreId) {
+    if (S.aimId !== best.id) { S.aimId = best.id; S.aimSince = tp; }
+    prog = Math.min(1, (tp - S.aimSince) / LOCK_MS);
+    if (S.auto && s0 && tp - S.aimSince > 500) { unlock(true); s0 = null; }
+    if (S.auto && prog >= 1) { lock(best); s0 = best; best = null; S.aim = null; prog = 0; }
+  } else if (!best && S.aimId && tp - S.aimSeen < 400) {
+    S.aimSince += S.frameDt * 1000; /* perte brève (tremblement) : on met en pause au lieu de repartir de zéro */
+  } else S.aimId = null;
+
   // réticule
-  const ra = s0 ? 0.35 : 1;
-  ctx.globalAlpha = ra; ctx.strokeStyle = best ? '#ffcf5c' : 'rgba(232,238,252,.6)'; ctx.lineWidth = 1.5;
+  ctx.globalAlpha = s0 && !best ? 0.35 : 1; ctx.strokeStyle = best ? '#ffcf5c' : 'rgba(232,238,252,.6)'; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.arc(cx, cy, 28, 0, 7);
   for (const [x1, y1, x2, y2] of [[cx - 44, cy, cx - 32, cy], [cx + 32, cy, cx + 44, cy], [cx, cy - 44, cx, cy - 32], [cx, cy + 32, cx, cy + 44]]) { ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); }
   ctx.stroke(); ctx.globalAlpha = 1;
-  if (!s0 && best && S.auto && prog > 0) {
-    ctx.strokeStyle = '#ffcf5c'; ctx.lineWidth = 3; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.arc(cx, cy, 34, -Math.PI / 2, -Math.PI / 2 + prog * Math.PI * 2); ctx.stroke();
+  if (best) {
+    if (S.auto && prog > 0) {
+      ctx.strokeStyle = '#ffcf5c'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.arc(cx, cy, 34, -Math.PI / 2, -Math.PI / 2 + prog * Math.PI * 2); ctx.stroke();
+    }
     brackets(best.sx, best.sy, 30 - 14 * ease(prog), `rgba(255,207,92,${0.4 + 0.6 * prog})`, 1.6);
+    // étiquette légère à la place de la fiche : on garde la vue dégagée pendant la visée
+    ctx.textAlign = 'center'; ctx.font = '600 14px system-ui'; ctx.fillStyle = '#ffcf5c';
+    ctx.fillText(short(best.name), cx, cy - 52);
+    ctx.font = '12px system-ui'; ctx.fillStyle = 'rgba(255,230,170,.85)';
+    ctx.fillText(S.auto ? 'verrouillage…' : 'touche « Verrouiller »', cx, cy + 84);
   }
   if (s0) {
     const p = P(s0.az, s0.el);
-    if (s0.el > -5 && p.ok && p.x > 0 && p.x < S.W && p.y > 0 && p.y < S.H) drawLocked(s0, p);
+    if (s0.el > -5 && p.ok && p.x > 0 && p.x < S.W && p.y > 0 && p.y < S.H) drawLocked(s0, p, 1, P);
     else arrow(p.dx, p.dy, s0);
   }
   ctx.fillStyle = 'rgba(232,238,252,.75)'; ctx.font = '13px system-ui'; ctx.textAlign = 'center';
@@ -630,10 +756,11 @@ function drawMap() {
   ctx.font = '600 15px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (const [n, a] of CARD) { if (n.length > 1) continue; const rr = g.r + 12, an = (a - hd) * D; ctx.fillStyle = n === 'N' ? '#ff6b6b' : 'rgba(232,238,252,.85)'; ctx.fillText(n, g.cx + rr * Math.sin(an), g.cy - rr * Math.cos(an)); }
   ctx.textBaseline = 'alphabetic';
+  drawFade(P, now);
   const s0 = S.sel;
-  if (s0) { const q = lookAt(s0, now); if (q) { s0.az = q.az; s0.el = q.el; } drawPass(P, s0, now); }
+  if (s0) { const q = lookAt(s0, now); if (q) { s0.az = q.az; s0.el = q.el; } drawOrbit(P, s0, now); drawPass(P, s0, now); }
   drawSats(P, {});
-  if (s0 && s0.el > 0) drawLocked(s0, P(s0.az, s0.el));
+  if (s0 && s0.el > 0) drawLocked(s0, P(s0.az, s0.el), 1, P);
   S.aim = null;
   ctx.fillStyle = 'rgba(138,150,179,.9)'; ctx.font = '12px system-ui'; ctx.textAlign = 'center';
   ctx.fillText(S.R && S.follow ? 'Carte tournée selon ta boussole · touche un satellite' : 'Nord en haut · touche un satellite', g.cx, g.cy + g.r + 34);
@@ -650,7 +777,7 @@ function drawGlobe(c, s, big) {
   if (!c.clientWidth) return;
   const { x: g, w } = sizeCanvas(c), now = Date.now(), gm = satellite.gstime(new Date(now));
   g.clearRect(0, 0, w, w);
-  const appear = ease((performance.now() - S.lockAt) / 500), reveal = ease((performance.now() - S.lockAt - 200) / 1200);
+  const appear = ease((performance.now() - s.lockAt) / 500), reveal = ease((performance.now() - s.lockAt - 200) / 1200);
   const lat0 = Math.max(-60, Math.min(60, S.obs.lat - 15)) * D, lon0 = S.obs.lon * D;
   const F = [Math.cos(lat0) * Math.cos(lon0), Math.cos(lat0) * Math.sin(lon0), Math.sin(lat0)];
   const EX = [-Math.sin(lon0), Math.cos(lon0), 0], NY = [-Math.sin(lat0) * Math.cos(lon0), -Math.sin(lat0) * Math.sin(lon0), Math.cos(lat0)];
@@ -737,8 +864,8 @@ function passText(s) {
   return `Prochain passage : lever à <i>${fmtT(p.rise.t)}</i> ${vers(p.rise.az)}, max ${mx} à ${fmtT(p.max.t)}${p.set ? `, coucher à ${fmtT(p.set.t)}` : ''}.`;
 }
 function renderCard() {
-  const s = S.sel || S.aim, c = $('#card');
-  if (!s) { if (lastCard) { c.classList.remove('show', 'locked'); lastCard = ''; } return; }
+  const s = S.sel, c = $('#card');
+  if (!s) { if (c.classList.contains('show')) c.classList.remove('show', 'locked'); lastCard = ''; return; }
   const locked = !!S.sel;
   const kb = locked && s.ctx?.kb, cat = locked && s.ctx?.cat;
   const sub = kb ? `${kb.type}${kb.pays ? ' · ' + kb.pays : ''}` : cat ? `${OWNERS[cat.OWNER] || cat.OWNER || ''}${cat.LAUNCH_DATE ? ' · lancé en ' + cat.LAUNCH_DATE.slice(0, 4) : ''}` : '';
@@ -825,7 +952,7 @@ function setMode(m) {
   S.mode = m; document.body.classList.toggle('map', m === 'map');
   $('#bMode').textContent = m === 'ar' ? 'Carte' : 'Visée';
   if (m === 'ar' && S.cam && !video.srcObject) startCamera();
-  if (S.sel) S.lockAt = performance.now() - 450;
+  if (S.sel) S.lockAt = S.sel.lockAt = performance.now() - 450;
 }
 $('#group').value = S.group;
 $('#group').onchange = e => { if (e.target.value === 'active') toast('≈ 10 000 satellites : le calcul peut ralentir le téléphone.'); loadGroup(e.target.value); };
@@ -856,17 +983,14 @@ let lastFrame = 0;
 function loop(t) {
   S.frameDt = lastFrame ? Math.min(0.1, (t - lastFrame) / 1000) : 0.016; lastFrame = t;
   stepOrientation(S.frameDt);
-  if (!S.loading && S.sats.length) {
-    const every = S.sats.length > 3000 ? 3000 : 1000;
-    if (t - S.lastCalc > every) {
-      compute(); S.lastCalc = t;
-      if ($('#sheetList').classList.contains('open') && !$('#q').value) renderList();
-    }
+  if (S.sats.length && (S.cc || t - S.lastCalc > 1000)) {
+    if (computeStep(6) && $('#sheetList').classList.contains('open') && !$('#q').value) renderList();
   }
   try { draw(); if (S.sel && $('#fiche').classList.contains('open')) drawGlobe($('#fGlobe'), S.sel, true); } catch (e) { console.error(e); }
   requestAnimationFrame(loop);
 }
-loadGroup(S.group).then(() => requestAnimationFrame(loop));
+requestAnimationFrame(loop);
+loadGroup(S.group);
 if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
 </script>

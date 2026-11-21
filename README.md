@@ -18,8 +18,8 @@ SatSky est une PWA sans serveur : elle récupère les orbites publiques, calcule
 ## Ce que ça fait
 
 - **Visée en réalité augmentée** : caméra arrière, horizon, points cardinaux et hauteurs. Les satellites sont colorés selon qu'ils sont **visibles à l'œil nu** (ambre), éclairés mais avec un ciel trop clair (bleu) ou dans l'ombre de la Terre (gris).
-- **Verrouillage automatique** : garde un satellite 2 s dans le réticule, un anneau se remplit, puis la cible se verrouille avec une vibration. Tu peux aussi toucher un satellite ou le chercher dans la liste.
-- **Trajectoire du passage** : le chemin dans le ciel se dessine depuis la position actuelle, avec le sens du mouvement, des repères de minutes, la culmination et l'heure de coucher. Si le satellite est hors champ, une flèche indique où tourner.
+- **Verrouillage automatique** : garde un satellite 2 s dans le réticule, un anneau se remplit, puis la cible se verrouille avec une vibration. Pendant la visée, seul son nom s'affiche, pour garder la vue dégagée. Vise un autre satellite et le précédent se libère. « Lâcher » efface la fiche et la trajectoire en fondu. Tu peux aussi toucher un satellite ou le chercher dans la liste.
+- **Trajectoire et orbite dans le ciel** : le passage se dessine depuis la position actuelle, avec des repères de minutes, la culmination et l'heure de coucher. Une flèche indique la direction du satellite. L'orbite complète se projette aussi dans le ciel : en ambre au-dessus de l'horizon, en pointillés bleus « à travers le sol » en dessous. Si le satellite est hors champ, une flèche indique où tourner.
 - **Orbite sur un globe** : le mini-globe montre l'orbite autour de la Terre, ta position, le satellite et la nuit en cours.
 - **Contexte** : pays ou opérateur, date et lieu de lancement, type d'orbite, résumé de la mission, science et enjeux pour une quarantaine de familles (stations, Hubble, Starlink, GPS, Galileo, météo, Copernicus, débris…), plus un extrait de Wikipédia quand il existe.
 - **Carte du ciel** : vue de dessus, tournée selon la boussole, pour quand on n'a pas envie de lever le bras.
@@ -37,6 +37,14 @@ Les capteurs d'un téléphone sont bruités, et la boussole est la plus mauvaise
 
 Un réglage « Correction du nord » permet de recaler la boussole sur un repère connu, comme la Lune, et un autre ajuste le champ de vision de la caméra.
 
+## Données d'orbite : un miroir plutôt que 1 000 téléphones
+
+CelesTrak limite les gros groupes (Starlink, Active) et renvoie une erreur HTTP 403 quand on les retélécharge trop souvent. Si chaque téléphone allait directement chez CelesTrak, Starlink finissait bloqué.
+
+La GitHub Action `Orbites (miroir CelesTrak)` télécharge donc chaque groupe **une fois toutes les 4 heures**, poliment, et les publie sur la branche `data`, sans historique. L'app lit ce miroir en premier, puis CelesTrak en secours, puis son cache local.
+
+Les gros groupes sont préparés par tranches et le calcul SGP4 est étalé sur plusieurs images (environ 6 ms par image). La visée reste fluide même avec les quelque 9 000 satellites Starlink.
+
 ## Lancer en local
 
 ```bash
@@ -50,7 +58,8 @@ La caméra, la boussole et le GPS demandent du **HTTPS** sur mobile. Pour tester
 
 ```bash
 npm test               # tests unitaires (node:test) : Soleil, ombre, quaternions, filtre, projection, TLE, orbites, contexte
-npm run test:e2e       # tests de bout en bout (Playwright, réseau simulé) : verrouillage, tremblement, liste, fiche, carte
+npm run test:e2e       # tests de bout en bout (Playwright, réseau simulé) : verrouillage, changement de cible,
+                       # libération, tremblement, liste, fiche, carte, secours CelesTrak, fluidité avec 9 000 satellites
 ```
 
 Les deux suites tournent dans GitHub Actions à chaque push.
@@ -65,11 +74,12 @@ Les deux suites tournent dans GitHub Actions à chaque push.
 | `land.js` | Contours des continents pour le globe (Natural Earth 110m) |
 | `satellite.min.js` | [satellite.js](https://github.com/shashwatak/satellite-js) 5.0.0, propagation SGP4 |
 | `sw.js`, `manifest.webmanifest` | PWA : installation et cache hors ligne |
+| `scripts/fetch-tle.mjs` | Miroir des orbites, lancé toutes les 4 h par GitHub Actions |
 | `tests/` | Tests unitaires et de bout en bout |
 
 ## Données et crédits
 
-- Orbites (TLE) et catalogue des objets : [CelesTrak](https://celestrak.org), mis en cache 6 h pour les orbites et 30 jours pour le catalogue.
+- Orbites (TLE) et catalogue des objets : [CelesTrak](https://celestrak.org). Les orbites passent par un miroir rafraîchi toutes les 4 h et restent 3 h en cache sur le téléphone ; le catalogue reste 30 jours en cache.
 - Extraits encyclopédiques : [Wikipédia](https://fr.wikipedia.org), sous licence CC BY-SA, avec un lien vers chaque article.
 - Contours des continents : [Natural Earth](https://www.naturalearthdata.com), domaine public, via world-atlas.
 - Propagation : satellite.js (MIT).
