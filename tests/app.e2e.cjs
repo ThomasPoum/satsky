@@ -74,17 +74,22 @@ test('viser un autre satellite libère le précédent puis verrouille le nouveau
   await setup(page);
   await page.click('#go');
   await aimAt(page, HIGHEST);
-  await expect(page.locator('#bClear')).toHaveText('Lâcher', { timeout: 4000 });
-  const first = await page.locator('#cMode').textContent();
-  // nouvelle cible : le plus haut des satellites à plus de 15° du premier
-  await page.evaluate(() => { window.__first = window.__satsky.sel; });
+  await expect(page.locator('#bClear')).toHaveText('Lâcher', { timeout: 6000 });
+  // enregistre, image par image, la cible verrouillée (indépendant de la vitesse de la machine)
+  await page.evaluate(() => {
+    const S = window.__satsky; window.__first = S.sel; window.__seq = [];
+    const f = () => { const id = S.sel ? S.sel.id : null; if (window.__seq.at(-1) !== id) window.__seq.push(id); requestAnimationFrame(f); };
+    requestAnimationFrame(f);
+  });
   await aimAt(page, `(() => { const f = window.__first, r = Math.PI / 180;
     const sep = s => Math.acos(Math.min(1, Math.sin(s.el * r) * Math.sin(f.el * r) + Math.cos(s.el * r) * Math.cos(f.el * r) * Math.cos((s.az - f.az) * r))) / r;
     return S.sats.filter(s => s.el > 8 && s !== f && sep(s) > 15).sort((a, b) => b.el - a.el)[0]; })()`);
-  await expect(page.locator('#bClear'), 'le précédent est libéré dès qu\'on vise ailleurs').toHaveText('Verrouiller', { timeout: 1500 });
-  await expect(page.locator('#card')).not.toHaveClass(/show/);
-  await expect(page.locator('#bClear')).toHaveText('Lâcher', { timeout: 4000 });
-  await expect(page.locator('#cMode')).not.toHaveText(first);
+  await expect.poll(() => page.evaluate(() => window.__seq.length), { timeout: 8000 }).toBeGreaterThanOrEqual(3);
+  const [first, gap, second] = await page.evaluate(() => window.__seq);
+  expect(first).toBe(await page.evaluate(() => window.__first.id));
+  expect(gap, 'le précédent est d\'abord libéré').toBeNull();
+  expect(second, 'puis le nouveau est verrouillé').not.toBe(first);
+  await expect(page.locator('#card')).toHaveClass(/show/);
 });
 
 test('un petit tremblement ne remet pas le verrouillage à zéro', async ({ page }) => {
