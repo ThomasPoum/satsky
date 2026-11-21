@@ -54,6 +54,16 @@ test('Mars : se déplacer garde l’altitude, la ville est là', async ({ page }
   const flat = await page.evaluate(() => { const S = window.mars.SITE; return [0, 0.2, -0.3].map(d => window.mars.heightAt(S.lat + d, S.lon - d)); });
   for (const h of flat) expect(h).toBeCloseTo(-4.75, 5);
   await expect(page.locator('.lb.city')).toHaveCount(4);
+  // Depuis la vue globale, un clic sur le nom de la ville y emmène (et pas chez un voisin).
+  await page.evaluate(() => { const m = window.mars; m.flyTo(2, -92, 11500); m.view.rate = 60; });
+  const name = page.locator('.lb.city', { hasText: 'Nouvelle-Arès' });
+  await expect(name).toBeVisible({ timeout: 30_000 });
+  await page.waitForFunction(() => Math.abs(window.mars.view.dist - 11500) < 5, null, { timeout: 30_000 });
+  const box = await name.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect.poll(() => page.evaluate(() => window.mars.view.distGoal), { timeout: 30_000 }).toBe(70);
+  const goal = await page.evaluate(() => { const m = window.mars, v = new m.camera.position.constructor(0, 1, 0).applyQuaternion(m.view.qGoal); return [Math.asin(v.y) * 57.2958, Math.atan2(-v.z, v.x) * 57.2958]; });
+  expect(goal[0]).toBeCloseTo(-11.2, 1); expect(goal[1]).toBeCloseTo(-70, 1);
   expect(errors).toEqual([]);
 });
 

@@ -1,7 +1,7 @@
 // Mars en 3D : globe à niveaux de détail, relief MOLA réel, atmosphère poussiéreuse, Soleil.
 // Repère : celui de la planète (fixe). Y = pôle nord, longitude 0 sur +X, l'est vers -Z. Unité : le kilomètre.
 import * as THREE from './three.module.min.js';
-import { SITE, createCity } from './city.js';
+import { SITE, createCity } from './city.js?v=4';
 
 const R = 3389.5, DEG = Math.PI / 180;
 const SEG = 48;            // segments par côté de tuile
@@ -817,25 +817,26 @@ const PLACES = [
 const labelBox = $('labels');
 const labels = [...PLACES, ...city.places].map(([name, lat, lon, far, site]) => {
   const el = document.createElement('button');
-  el.className = 'lb' + (site === 2 ? ' city' : site ? ' site' : ''); el.textContent = name; el.style.display = 'none';
+  el.className = 'lb' + (site === 2 ? ' city' : site ? ' site' : ''); el.textContent = name;
   const go = () => flyTo(lat, lon, Math.min(view.distGoal, site === 2 ? (far > 1e5 ? 70 : 14) : site ? 250 : 900));
   el.addEventListener('click', go);
   labelBox.appendChild(el);
-  return { el, lat, lon, far, go, dir: dirOf(lat, lon), on: false, x: 0, y: 0, w: 0 };
+  const w = el.offsetWidth;
+  el.style.display = 'none';
+  return { el, lat, lon, far, go, dir: dirOf(lat, lon), on: false, x: 0, y: 0, w, top: site === 2 };
 });
 let namesOn = true;
+// Ordre de priorité : la ville d'abord, puis l'ordre de la liste. Un nom qui en chevaucherait un autre s'efface.
+const byRank = [...labels.filter(l => l.top), ...labels.filter(l => !l.top)];
 // Les noms ne captent pas la souris (ils gêneraient les glissers) : un clic bref sur le canevas cherche le nom dessous.
 function labelAt(x, y) {
-  for (const l of labels) {
-    if (!l.on) continue;
-    if (!l.w) l.w = l.el.offsetWidth;
-    if (x > l.x - 8 && x < l.x + l.w && Math.abs(y - l.y) < 14) return l;
-  }
-  return null;
+  return byRank.find(l => l.on && x > l.x - 10 && x < l.x + l.w + 4 && Math.abs(y - l.y) < 15) || null;
 }
+const placed = [];
 function updateLabels(w, h) {
   const ex = shared.uEx.value;
-  for (const l of labels) {
+  placed.length = 0;
+  for (const l of byRank) {
     let on = namesOn && view.dist < l.far;
     if (on) {
       tmpV.copy(l.dir).multiplyScalar(R + ex * sampleLow(l.lat, l.lon));
@@ -843,7 +844,11 @@ function updateLabels(w, h) {
       if (on) {
         tmpV.project(camera);
         on = tmpV.z < 1 && Math.abs(tmpV.x) < 1.05 && Math.abs(tmpV.y) < 1.05;
-        if (on) { l.x = (tmpV.x + 1) / 2 * w; l.y = (1 - tmpV.y) / 2 * h; l.el.style.transform = `translate(${l.x.toFixed(1)}px,${l.y.toFixed(1)}px) translateY(-50%)`; }
+      }
+      if (on) {
+        const x = (tmpV.x + 1) / 2 * w, y = (1 - tmpV.y) / 2 * h;
+        on = !placed.some(o => x < o.x + o.w + 6 && x + l.w + 6 > o.x && Math.abs(y - o.y) < 20);
+        if (on) { l.x = x; l.y = y; placed.push(l); l.el.style.transform = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px) translateY(-50%)`; }
       }
     }
     if (on !== l.on) { l.on = on; l.el.style.display = on ? '' : 'none'; }
@@ -875,7 +880,7 @@ addEventListener('pointerup', () => { sunDrag = false; });
 $('bSpeed').addEventListener('click', () => { sun.speed = SPEEDS[(SPEEDS.findIndex(s => s[0] === sun.speed) + 1) % SPEEDS.length][0]; syncPanel(); });
 $('bNames').addEventListener('click', e => { namesOn = !namesOn; e.currentTarget.setAttribute('aria-pressed', namesOn); });
 $('bGlobe').addEventListener('click', () => { anchor(); view.tiltGoal = 0; flyTo(view.lat, view.lon, HOME.dist); });
-$('bNorth').addEventListener('click', () => { anchor(); flyTo(view.lat, view.lon, 0); });
+$('bNorth').addEventListener('click', () => { anchor(); flyTo(view.lat, view.lon, 0); view.tiltGoal = view.onGround ? 0 : view.tiltGoal; });
 $('bCity').addEventListener('click', () => { view.tiltGoal = 0; flyTo(SITE.lat, SITE.lon, 70, false, 0.5); });
 $('bLook').addEventListener('click', e => { view.look = !view.look; e.currentTarget.setAttribute('aria-pressed', view.look); });
 const panel = $('panel'), bPanel = $('bPanel');
