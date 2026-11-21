@@ -260,13 +260,17 @@ async function getTLE(g, onStep) {
 }
 /* préparation par tranches : l'écran ne gèle pas pendant les ~9 000 satellites de Starlink */
 async function parseChunked(txt, onStep) {
-  const L = txt.split(/\r?\n/), out = [], CH = 3000;
+  const L = txt.split(/\r?\n/), out = [], CH = 300;   // ~100 satellites par tranche, pause toutes les 8 ms
+  let t0 = performance.now();
   for (let i = 0; i < L.length;) {
     let j = Math.min(L.length, i + CH);
     while (j < L.length && /^[12] /.test(L[j])) j++;
     out.push(...parseTLE(L.slice(i, j).join('\n')));
     i = j;
-    if (i < L.length) { onStep?.(`Préparation… ${Math.round(i / L.length * 100)} %`); await new Promise(r => setTimeout(r)); }
+    if (i < L.length && performance.now() - t0 > 8) {
+      onStep?.(`Préparation… ${Math.round(i / L.length * 100)} %`);
+      await new Promise(r => setTimeout(r)); t0 = performance.now();
+    }
   }
   return out;
 }
