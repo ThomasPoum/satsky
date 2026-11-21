@@ -1,6 +1,7 @@
 // Mars en 3D : globe à niveaux de détail, relief MOLA réel, atmosphère poussiéreuse, Soleil.
 // Repère : celui de la planète (fixe). Y = pôle nord, longitude 0 sur +X, l'est vers -Z. Unité : le kilomètre.
 import * as THREE from './three.module.min.js';
+import { SITE, createCity } from './city.js';
 
 const R = 3389.5, DEG = Math.PI / 180;
 const SEG = 48;            // segments par côté de tuile
@@ -46,15 +47,22 @@ let hiRanges = null;           // [min, max] en mètres par case de niveau 3
 const hiTiles = new Map();     // 'x_y' -> { d: Uint8Array 722², lo, span, last } ou Promise
 let frame = 0;
 
+// Le site de la ville est aplani : un plateau à altitude fixe, raccordé en douceur au terrain réel.
+const siteDir = dirOf(SITE.lat, SITE.lon), siteTmp = new THREE.Vector3();
+function leveled(h, lat, lon) {
+  if (Math.abs(lat - SITE.lat) > 1.2 || Math.abs(wrap180(lon - SITE.lon)) > 1.2) return h;
+  const d = Math.acos(Math.min(1, dirOf(lat, lon, siteTmp).dot(siteDir))) * R;
+  return h + (SITE.h - h) * (1 - smooth(SITE.flat0, SITE.flat1, d));
+}
 function sampleLow(lat, lon) {
   const fx = clamp((wrap180(lon) + 180) * 4, 0, 1440), fy = clamp((90 - lat) * 4, 0, 720);
   const x = Math.min(fx | 0, 1439), y = Math.min(fy | 0, 719), u = fx - x, v = fy - y, i = y * 1441 + x;
-  return (low[i] * (1 - u) + low[i + 1] * u) * (1 - v) + (low[i + 1441] * (1 - u) + low[i + 1442] * u) * v;
+  return leveled((low[i] * (1 - u) + low[i + 1] * u) * (1 - v) + (low[i + 1441] * (1 - u) + low[i + 1442] * u) * v, lat, lon);
 }
 function sampleHi(t, tx, ty, lat, lon) {
   const fx = clamp((lon - (-180 + tx * 22.5)) * 32 + 0.5, 0, 720.999), fy = clamp((90 - ty * 22.5 - lat) * 32 + 0.5, 0, 720.999);
   const x = fx | 0, y = fy | 0, u = fx - x, v = fy - y, i = y * 722 + x, d = t.d;
-  return t.lo + t.span * ((d[i] * (1 - u) + d[i + 1] * u) * (1 - v) + (d[i + 722] * (1 - u) + d[i + 723] * u) * v);
+  return leveled(t.lo + t.span * ((d[i] * (1 - u) + d[i + 1] * u) * (1 - v) + (d[i + 722] * (1 - u) + d[i + 723] * u) * v), lat, lon);
 }
 function hiKey(lat, lon) {
   const tx = clamp(Math.floor((wrap180(lon) + 180) / 22.5), 0, 15), ty = clamp(Math.floor((90 - lat) / 22.5), 0, 7);
@@ -99,6 +107,7 @@ const shared = {
   uEx: { value: 3 },
   uHs: { value: 11 },
   uPix: { value: 0.001 },      // angle d'un pixel, en radians
+  uCity: { value: siteDir },
 };
 
 const ATMO = /* glsl */`
@@ -158,6 +167,7 @@ ${ATMO}
 uniform sampler2D tColor, tNorm;
 uniform vec4 uCx, uNx;        // échelle (xy) et décalage (zw) vers la tuile de couleur / de pentes
 uniform float uSmooth, uPix;
+uniform vec3 uCity;
 varying vec2 vUv;
 varying vec3 vPos;
 
@@ -202,6 +212,8 @@ void main() {
   float se, sn;
   if (uSmooth > 0.5) { se = slope(bicubic(pn)); sn = slope(bicubic(pn2)); }
   else { se = slope(texture2D(tNorm, pn / sz).r); sn = slope(texture2D(tNorm, pn2 / sz).r); }
+  float level = smoothstep(38.0, 54.0, length(up - uCity) * RP);      // plateau de la ville : plus de pentes
+  se *= level; sn *= level;
 
   // De près, les données (1,85 km par point) ne suffisent plus : un grain fractal prend le relais,
   // plus marqué là où le terrain réel est accidenté. Chaque octave s'efface quand elle devient plus fine qu'un pixel.
@@ -494,9 +506,12 @@ const airMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), new THREE.Sh
 airMesh.frustumCulled = false; airMesh.renderOrder = 2;
 sky.add(airMesh);
 
-/* ───────────── Caméra : un point visé au sol, une distance, une inclinaison ───────────── */
+/* ───────────── Caméra ─────────────
+   Un pivot (un point de l'espace, d'ordinaire au sol), une distance, une inclinaison.
+   Se déplacer garde le pivot à altitude constante : on vole à plat, comme un avion, sans plonger dans les ravins.
+   Le pivot ne se recale sur le terrain qu'au début d'un geste, sans jamais faire bouger la caméra. */
 
-// Orientation du « chariot » : son Y sort du sol au point visé, son -Z est la direction de visée au sol.
+// Orientation du « chariot » : son Y est la verticale du pivot, son -Z la direction de visée à plat.
 function rigAt(lat, lon, heading = 0) {
   const up = dirOf(lat, lon), east = new THREE.Vector3(0, 1, 0).cross(up);
   if (east.lengthSq() < 1e-10) east.set(0, 0, -1);
@@ -509,15 +524,17 @@ const AX = new THREE.Vector3(1, 0, 0), AY = new THREE.Vector3(0, 1, 0), AZ = new
 const HOME = { lat: 2, lon: -92, dist: 11500 };
 const view = {
   q: rigAt(HOME.lat, HOME.lon), qGoal: rigAt(HOME.lat, HOME.lon),
+  rP: R, rPGoal: R,                  // rayon du pivot, depuis le centre de Mars
   dist: 26000, distGoal: HOME.dist, tilt: 0, tiltGoal: 0, rate: 3,
-  vel: new THREE.Vector2(), lat: HOME.lat, lon: HOME.lon, tiltNow: 0,
+  vel: new THREE.Vector2(), lat: HOME.lat, lon: HOME.lon, tiltNow: 0, onGround: true, look: false,
 };
-const MIN_DIST = 3, MAX_DIST = 90000;
-const qTmp = new THREE.Quaternion();
+const MIN_DIST = 1.2, MAX_DIST = 90000, CLEAR = 0.3, ORBIT_MAX = 88 * DEG, LOOK_MAX = 155 * DEG;
+const qTmp = new THREE.Quaternion(), mTmp = new THREE.Matrix4();
 const autoTilt = d => 78 * DEG * (1 - smooth(Math.log10(8), Math.log10(4000), Math.log10(d)));
 
-function pan(right, fwd) {            // angles en radians, le long du sol
+function pan(right, fwd, both = false) {     // angles en radians, à altitude constante
   view.qGoal.multiply(qTmp.setFromAxisAngle(AX, -fwd)).multiply(qTmp.setFromAxisAngle(AZ, -right)).normalize();
+  if (both) view.q.multiply(qTmp.setFromAxisAngle(AX, -fwd)).multiply(qTmp.setFromAxisAngle(AZ, -right)).normalize();
 }
 function userMoved() { view.rate = 14; }
 function flyTo(lat, lon, dist, keepHeading = false, heading = 0) {
@@ -527,12 +544,93 @@ function flyTo(lat, lon, dist, keepHeading = false, heading = 0) {
     heading = Math.atan2(f.dot(e), f.dot(n));
   }
   view.qGoal.copy(rigAt(lat, lon, heading));
-  if (dist) view.distGoal = clamp(dist, MIN_DIST, MAX_DIST);
+  if (dist) {
+    view.distGoal = clamp(dist, MIN_DIST, MAX_DIST);
+    view.rPGoal = R + shared.uEx.value * heightAt(lat, lon);
+    view.tiltGoal = clamp(view.tiltGoal, -autoTilt(view.distGoal), ORBIT_MAX - autoTilt(view.distGoal));
+    view.onGround = true;
+  }
   view.rate = 2.6; view.vel.set(0, 0);
+}
+
+/** Distance du premier point de terrain le long d'un rayon, ou null s'il part dans le ciel. */
+function castTerrain(ro, rd, maxT = 2e4) {
+  const ex = shared.uEx.value, rTop = R + 22 * ex + 1;
+  const b = ro.dot(rd), c = ro.lengthSq() - rTop * rTop, h = b * b - c;
+  let t = 0;
+  if (c > 0) { if (h < 0 || b > 0) return null; t = -b - Math.sqrt(h); }
+  const tEnd = Math.min(maxT, h > 0 ? -b + Math.sqrt(h) : maxT);
+  let prev = t;
+  for (let i = 0; i < 400 && t <= tEnd; i++) {
+    tmpV.copy(ro).addScaledVector(rd, t);
+    const gap = tmpV.length() - (R + ex * heightAt(latOf(tmpV), lonOf(tmpV)));
+    if (gap <= 0) {
+      let lo = prev, hi = t;
+      for (let k = 0; k < 10; k++) {
+        const mid = (lo + hi) / 2; tmpV.copy(ro).addScaledVector(rd, mid);
+        if (tmpV.length() - (R + ex * heightAt(latOf(tmpV), lonOf(tmpV))) > 0) lo = mid; else hi = mid;
+      }
+      return hi;
+    }
+    prev = t; t += Math.max(gap * 0.4, 0.02 + t * 0.003);
+  }
+  return null;
+}
+const aP = new THREE.Vector3(), aD = new THREE.Vector3(), aX = new THREE.Vector3(), aU = new THREE.Vector3(), aF = new THREE.Vector3(), aO = new THREE.Vector3();
+/** Place le pivot en X sans déplacer la caméra (en P, qui regarde vers X). */
+function setRig(X, P, upHint, onGround) {
+  const rho = Math.max(X.distanceTo(P), 1e-3);
+  aU.copy(X).normalize(); aO.copy(P).sub(X).divideScalar(rho);
+  const t = Math.acos(clamp(aU.dot(aO), -1, 1));
+  aF.copy(aO).addScaledVector(aU, -aU.dot(aO)).negate();
+  if (aF.lengthSq() < 1e-6) aF.copy(upHint).addScaledVector(aU, -aU.dot(upHint));
+  aF.normalize();
+  view.q.setFromRotationMatrix(mTmp.makeBasis(aD.copy(aF).cross(aU), aU, aO.copy(aF).negate()));
+  view.qGoal.copy(view.q);
+  view.rP = view.rPGoal = X.length();
+  view.dist = view.distGoal = rho;
+  view.tilt = view.tiltGoal = t - autoTilt(rho);
+  view.onGround = onGround; view.vel.set(0, 0);
+}
+/** Recale le pivot sur ce que la caméra regarde ; s'il n'y a que du ciel, le pivot reste devant elle, en l'air. */
+function anchor(dir) {
+  aP.copy(camera.position);
+  if (!dir) dir = camera.getWorldDirection(aD);
+  const upHint = aX.set(0, 1, 0).applyQuaternion(camera.quaternion).clone();
+  const t = castTerrain(aP, dir);
+  const rho = t ?? clamp(view.dist, 5, 400);
+  setRig(aX.copy(aP).addScaledVector(dir, Math.max(rho, 0.05)), aP, upHint, t !== null);
+}
+/** Tourne la caméra sur place : dx vers la droite, dy vers le bas, en radians. */
+const lD = new THREE.Vector3(), lZ = new THREE.Vector3(), lR = new THREE.Vector3();
+function lookAround(dx, dy) {
+  lZ.copy(camera.position).normalize();
+  camera.getWorldDirection(lD);
+  lR.copy(lD).cross(lZ);
+  if (lR.lengthSq() < 1e-8) lR.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  lR.normalize();
+  const nadir = Math.acos(clamp(-lD.dot(lZ), -1, 1)), turn = clamp(nadir - dy, 0.02, LOOK_MAX) - nadir;
+  lD.applyAxisAngle(lR, turn).applyAxisAngle(lZ, -dx).normalize();
+  anchor(lD);
 }
 
 const sun = { lon: -52, ls: 70, speed: 300 };
 const vUp = new THREE.Vector3(), vFwd = new THREE.Vector3(), vT = new THREE.Vector3();
+const keys = new Set();
+let lookedByKey = false;
+
+function flyByKeys(dt) {
+  if (!keys.size) return;
+  const fast = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 4 : 1;
+  const step = clamp(camAgl, 0.4, 4000) * 1.1 * fast * dt;
+  const f = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0), r = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
+  const u = (keys.has('KeyR') || keys.has('PageUp') || keys.has('Space') ? 1 : 0) - (keys.has('KeyF') || keys.has('PageDown') ? 1 : 0);
+  const yaw = (keys.has('ArrowRight') ? 1 : 0) - (keys.has('ArrowLeft') ? 1 : 0), pitch = (keys.has('ArrowDown') ? 1 : 0) - (keys.has('ArrowUp') ? 1 : 0);
+  if (yaw || pitch) { lookAround(yaw * dt * 0.9, pitch * dt * 0.7); lookedByKey = true; }
+  if (f || r) { view.vel.set(0, 0); pan(r * step / view.rP, f * step / view.rP, true); }
+  if (u) { view.rP = view.rPGoal = Math.max(view.rP + u * step, R - 9 * shared.uEx.value); }
+  if (f || r || u || yaw || pitch) userMoved();
+}
 
 function updateCamera(dt) {
   // Vu de loin, c'est Mars qui tourne sous un Soleil fixe ; au sol, c'est le Soleil qui traverse le ciel.
@@ -543,6 +641,7 @@ function updateCamera(dt) {
     qTmp.setFromAxisAngle(AY, -spin * follow);
     view.q.premultiply(qTmp); view.qGoal.premultiply(qTmp);
   }
+  flyByKeys(dt);
   if (view.vel.lengthSq() > 1e-12) {
     pan(view.vel.x * dt, view.vel.y * dt);
     view.vel.multiplyScalar(Math.exp(-dt * 4));
@@ -551,26 +650,30 @@ function updateCamera(dt) {
   view.q.slerp(view.qGoal, k);
   view.dist = Math.exp(Math.log(view.dist) + (Math.log(view.distGoal) - Math.log(view.dist)) * k);
   view.tilt += (view.tiltGoal - view.tilt) * k;
+  view.rP += (view.rPGoal - view.rP) * k;
 
   vUp.copy(AY).applyQuaternion(view.q); vFwd.set(0, 0, -1).applyQuaternion(view.q);
   view.lat = latOf(vUp); view.lon = lonOf(vUp);
   const ex = shared.uEx.value;
-  vT.copy(vUp).multiplyScalar(R + ex * heightAt(view.lat, view.lon));
-  const t = clamp(autoTilt(view.dist) + view.tilt, 0, 86 * DEG), ct = Math.cos(t), st = Math.sin(t);
+  vT.copy(vUp).multiplyScalar(view.rP);
+  const t = clamp(autoTilt(view.dist) + view.tilt, 0, LOOK_MAX), ct = Math.cos(t), st = Math.sin(t);
   view.tiltNow = t;
   camera.position.copy(vT).addScaledVector(vUp, view.dist * ct).addScaledVector(vFwd, -view.dist * st);
   camLat = latOf(camera.position); camLon = lonOf(camera.position);
-  let ground = R + ex * heightAt(camLat, camLon);
-  if (camera.position.length() < ground + 0.35) camera.position.setLength(ground + 0.35);
+  const ground = R + ex * heightAt(camLat, camLon), lift = ground + CLEAR - camera.position.length();
+  if (lift > 0) {                    // un relief sur la route : on monte juste ce qu'il faut, et on reste à cette altitude
+    camera.position.setLength(ground + CLEAR);
+    view.rP += lift; view.rPGoal += lift; vT.addScaledVector(vUp, lift);
+  }
   camDist = camera.position.length(); camAgl = camDist - ground;
   camera.up.copy(vFwd).multiplyScalar(ct).addScaledVector(vUp, st);
   camera.lookAt(vT);
-  camera.near = clamp(camAgl * 0.4, 0.05, 3000);
+  camera.near = clamp(camAgl * 0.12, 0.02, 3000);
   camera.far = camDist + R * 1.2;
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
+  if (camAgl < 2500) { const [tx, ty] = hiKey(camLat, camLon); loadHi(tx, ty).catch(() => {}); }
   if (view.dist < 2500) { const [tx, ty] = hiKey(view.lat, view.lon); loadHi(tx, ty).catch(() => {}); }
-  if (camAgl < 1500) { const [tx, ty] = hiKey(camLat, camLon); loadHi(tx, ty).catch(() => {}); }
 
   const dec = Math.asin(Math.sin(TILT) * Math.sin(sun.ls * DEG)) / DEG;
   dirOf(dec, sun.lon, shared.uSun.value);
@@ -585,43 +688,45 @@ function updateCamera(dt) {
   airMesh.scale.setScalar((R + 7 * shared.uHs.value) * 1.004);
 }
 
-/* ───────────── Gestes ───────────── */
+/* ───────────── Gestes ─────────────
+   Glisser : se déplacer. Clic droit, Ctrl ou deux doigts : tourner autour du point visé.
+   Maj + glisser, ou le mode « Regarder » : tourner la caméra sur place. Molette, pincement : avancer vers le point visé. */
 
 const pointers = new Map();
-let pinch = null, lastTap = 0, tapX = 0, tapY = 0, moved = 0, lastMoveT = 0;
-const panScale = () => Math.min(view.dist / (R * focalPx / renderer.getPixelRatio()), 0.008);
+let pinch = null, lastTap = 0, tapX = 0, tapY = 0, moved = 0, lastMoveT = 0, lastWheel = 0;
+const cssFocal = () => focalPx / renderer.getPixelRatio();
+const panScale = () => Math.min(view.dist / (view.rP * cssFocal()), 0.008);
+const tmp2 = new THREE.Vector2();
 function dragPan(dx, dy, now) {
-  const s = panScale(), r = -dx * s, f = dy * s / Math.max(Math.cos(view.tiltNow), 0.35);
+  const s = panScale(), r = -dx * s, f = dy * s / Math.max(Math.abs(Math.cos(view.tiltNow)), 0.35);
   pan(r, f);
   const dtm = Math.max((now - lastMoveT) / 1000, 0.004);
   view.vel.lerp(tmp2.set(r / dtm, f / dtm), 0.5);
   lastMoveT = now;
 }
-const tmp2 = new THREE.Vector2();
-function dragTurn(dx, dy) {
-  view.qGoal.multiply(qTmp.setFromAxisAngle(AY, dx * 0.005)).normalize();
+function orbit(dHeading, dTilt) {
+  if (!view.onGround) { lookAround(-dHeading, dTilt); return; }
+  view.qGoal.multiply(qTmp.setFromAxisAngle(AY, dHeading)).normalize();
   const base = autoTilt(view.distGoal);
-  view.tiltGoal = clamp(view.tiltGoal - dy * 0.005, -base, 86 * DEG - base);
+  view.tiltGoal = clamp(view.tiltGoal + dTilt, -base, ORBIT_MAX - base);
 }
-function pick(cx, cy) {              // point de la sphère sous le curseur, ou null
+function rayAt(cx, cy, out) {
   const r = canvas.getBoundingClientRect();
-  const ro = camera.position, rd = tmpV.set((cx - r.left) / r.width * 2 - 1, 1 - (cy - r.top) / r.height * 2, 0.5).unproject(camera).sub(ro).normalize();
-  const b = ro.dot(rd), c = ro.lengthSq() - vT.lengthSq(), h = b * b - c;
-  if (h < 0) return null;
-  const t = -b - Math.sqrt(h);
-  if (t < 0) return null;
-  const p = rd.multiplyScalar(t).add(ro);
-  return [latOf(p), lonOf(p)];
+  return out.set((cx - r.left) / r.width * 2 - 1, 1 - (cy - r.top) / r.height * 2, 0.5).unproject(camera).sub(camera.position).normalize();
 }
 function goTo(cx, cy) {
-  const p = pick(cx, cy);
-  if (p) flyTo(p[0], p[1], Math.max(view.distGoal * 0.35, 12), true);
+  const d = rayAt(cx, cy, aD).clone(), t = castTerrain(camera.position, d);
+  if (t === null) return;
+  const p = d.multiplyScalar(t).add(camera.position);
+  flyTo(latOf(p), lonOf(p), Math.max(t * 0.35, 6), true);
 }
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, turn: e.button === 2 || e.shiftKey || e.ctrlKey });
-  canvas.classList.add('drag');
-  view.vel.set(0, 0); moved = 0; lastMoveT = performance.now(); pinch = null;
+  const mode = e.button === 2 || e.button === 1 || e.ctrlKey ? 'orbit' : e.shiftKey || view.look ? 'look' : 'pan';
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, mode });
+  canvas.classList.add('drag'); canvas.focus({ preventScroll: true });
+  anchor();
+  moved = 0; lastMoveT = performance.now(); pinch = null;
   userMoved();
 });
 canvas.addEventListener('pointermove', e => {
@@ -629,16 +734,17 @@ canvas.addEventListener('pointermove', e => {
   if (!p) return;
   const dx = e.clientX - p.x, dy = e.clientY - p.y;
   p.x = e.clientX; p.y = e.clientY; moved += Math.abs(dx) + Math.abs(dy);
-  if (pointers.size === 1) { if (p.turn) dragTurn(dx, dy); else dragPan(dx, dy, performance.now()); }
-  else if (pointers.size === 2) {
+  if (pointers.size === 1) {
+    if (p.mode === 'orbit') orbit(dx * 0.005, -dy * 0.005);
+    else if (p.mode === 'look') lookAround(-dx / cssFocal(), -dy / cssFocal());
+    else dragPan(dx, dy, performance.now());
+  } else if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     const d = Math.hypot(b.x - a.x, b.y - a.y), ang = Math.atan2(b.y - a.y, b.x - a.x), my = (a.y + b.y) / 2;
     if (pinch) {
       view.distGoal = clamp(view.distGoal * pinch.d / Math.max(d, 1), MIN_DIST, MAX_DIST);
       let da = ang - pinch.ang; da = Math.atan2(Math.sin(da), Math.cos(da));
-      view.qGoal.multiply(qTmp.setFromAxisAngle(AY, da)).normalize();
-      const base = autoTilt(view.distGoal);
-      view.tiltGoal = clamp(view.tiltGoal - (my - pinch.my) * 0.006, -base, 86 * DEG - base);
+      orbit(da, -(my - pinch.my) * 0.006);
     }
     pinch = { d, ang, my };
   }
@@ -649,6 +755,10 @@ function pointerEnd(e) {
   if (!pointers.size) canvas.classList.remove('drag');
   const now = performance.now();
   if (now - lastMoveT > 80) view.vel.set(0, 0);
+  if (e.type === 'pointerup' && moved < 8 && !pointers.size) {
+    const r = canvas.getBoundingClientRect(), l = labelAt(e.clientX - r.left, e.clientY - r.top);
+    if (l) { l.go(); lastTap = 0; return; }
+  }
   if (e.type === 'pointerup' && e.pointerType !== 'mouse' && moved < 12 && !pointers.size) {
     if (now - lastTap < 320 && Math.hypot(e.clientX - tapX, e.clientY - tapY) < 30) { goTo(e.clientX, e.clientY); lastTap = 0; }
     else { lastTap = now; tapX = e.clientX; tapY = e.clientY; }
@@ -660,19 +770,29 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('dblclick', e => goTo(e.clientX, e.clientY));
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
+  const now = performance.now();
+  if (now - lastWheel > 400) anchor();
+  lastWheel = now;
   const d = e.deltaY * (e.deltaMode === 1 ? 16 : 1) * (e.ctrlKey ? 4 : 1);
   view.distGoal = clamp(view.distGoal * Math.exp(clamp(d, -300, 300) * 0.0014), MIN_DIST, MAX_DIST);
   userMoved();
 }, { passive: false });
-canvas.addEventListener('keydown', e => {
-  const s = 40 * panScale(), k = e.key;
-  if (k === 'ArrowLeft') pan(-s, 0); else if (k === 'ArrowRight') pan(s, 0);
-  else if (k === 'ArrowUp') pan(0, s); else if (k === 'ArrowDown') pan(0, -s);
-  else if (k === '+' || k === '=') view.distGoal = Math.max(MIN_DIST, view.distGoal * 0.8);
-  else if (k === '-') view.distGoal = Math.min(MAX_DIST, view.distGoal * 1.25);
-  else return;
-  e.preventDefault(); userMoved();
+const FLY_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF', 'Space', 'PageUp', 'PageDown', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'ShiftLeft', 'ShiftRight']);
+addEventListener('keydown', e => {
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement && e.code === 'Space' || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (FLY_KEYS.has(e.code)) {
+    if (!keys.has(e.code) && !e.code.startsWith('Shift') && !e.code.startsWith('Arrow') && !keys.size) anchor();
+    keys.add(e.code); e.preventDefault();
+  } else if (e.key === '+' || e.key === '=') { view.distGoal = Math.max(MIN_DIST, view.distGoal * 0.8); userMoved(); }
+  else if (e.key === '-') { view.distGoal = Math.min(MAX_DIST, view.distGoal * 1.25); userMoved(); }
 });
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+
+/* ───────────── La ville ───────────── */
+
+const city = createCity(THREE, { shared, ATMO, R, dirOf });
+scene.add(city.group);
 
 /* ───────────── Noms de lieux ───────────── */
 
@@ -695,14 +815,24 @@ const PLACES = [
   ['Phoenix', 68.22, -125.75, 5000, 1], ['Pathfinder', 19.13, -33.22, 4000, 1],
 ];
 const labelBox = $('labels');
-const labels = PLACES.map(([name, lat, lon, far, site]) => {
+const labels = [...PLACES, ...city.places].map(([name, lat, lon, far, site]) => {
   const el = document.createElement('button');
-  el.className = 'lb' + (site ? ' site' : ''); el.textContent = name; el.style.display = 'none';
-  el.addEventListener('click', () => flyTo(lat, lon, Math.min(view.distGoal, site ? 250 : 900)));
+  el.className = 'lb' + (site === 2 ? ' city' : site ? ' site' : ''); el.textContent = name; el.style.display = 'none';
+  const go = () => flyTo(lat, lon, Math.min(view.distGoal, site === 2 ? (far > 1e5 ? 70 : 14) : site ? 250 : 900));
+  el.addEventListener('click', go);
   labelBox.appendChild(el);
-  return { el, lat, lon, far, dir: dirOf(lat, lon), on: false };
+  return { el, lat, lon, far, go, dir: dirOf(lat, lon), on: false, x: 0, y: 0, w: 0 };
 });
 let namesOn = true;
+// Les noms ne captent pas la souris (ils gêneraient les glissers) : un clic bref sur le canevas cherche le nom dessous.
+function labelAt(x, y) {
+  for (const l of labels) {
+    if (!l.on) continue;
+    if (!l.w) l.w = l.el.offsetWidth;
+    if (x > l.x - 8 && x < l.x + l.w && Math.abs(y - l.y) < 14) return l;
+  }
+  return null;
+}
 function updateLabels(w, h) {
   const ex = shared.uEx.value;
   for (const l of labels) {
@@ -713,7 +843,7 @@ function updateLabels(w, h) {
       if (on) {
         tmpV.project(camera);
         on = tmpV.z < 1 && Math.abs(tmpV.x) < 1.05 && Math.abs(tmpV.y) < 1.05;
-        if (on) l.el.style.transform = `translate(${((tmpV.x + 1) / 2 * w).toFixed(1)}px,${((1 - tmpV.y) / 2 * h).toFixed(1)}px) translateY(-50%)`;
+        if (on) { l.x = (tmpV.x + 1) / 2 * w; l.y = (1 - tmpV.y) / 2 * h; l.el.style.transform = `translate(${l.x.toFixed(1)}px,${l.y.toFixed(1)}px) translateY(-50%)`; }
       }
     }
     if (on !== l.on) { l.on = on; l.el.style.display = on ? '' : 'none'; }
@@ -744,8 +874,10 @@ sSun.addEventListener('pointerdown', () => { sunDrag = true; });
 addEventListener('pointerup', () => { sunDrag = false; });
 $('bSpeed').addEventListener('click', () => { sun.speed = SPEEDS[(SPEEDS.findIndex(s => s[0] === sun.speed) + 1) % SPEEDS.length][0]; syncPanel(); });
 $('bNames').addEventListener('click', e => { namesOn = !namesOn; e.currentTarget.setAttribute('aria-pressed', namesOn); });
-$('bGlobe').addEventListener('click', () => { view.tiltGoal = 0; flyTo(view.lat, view.lon, HOME.dist); });
-$('bNorth').addEventListener('click', () => { view.tiltGoal = 0; flyTo(view.lat, view.lon, 0); });
+$('bGlobe').addEventListener('click', () => { anchor(); view.tiltGoal = 0; flyTo(view.lat, view.lon, HOME.dist); });
+$('bNorth').addEventListener('click', () => { anchor(); flyTo(view.lat, view.lon, 0); });
+$('bCity').addEventListener('click', () => { view.tiltGoal = 0; flyTo(SITE.lat, SITE.lon, 70, false, 0.5); });
+$('bLook').addEventListener('click', e => { view.look = !view.look; e.currentTarget.setAttribute('aria-pressed', view.look); });
 const panel = $('panel'), bPanel = $('bPanel');
 function setPanel(open) { panel.hidden = !open; bPanel.setAttribute('aria-expanded', open); }
 bPanel.addEventListener('click', () => setPanel(panel.hidden));
@@ -755,10 +887,9 @@ let hudT = 0;
 function updateHud(now) {
   if (now - hudT < 150) return;
   hudT = now;
-  $('hAlt').textContent = fmtKm(camAgl);
-  $('hPos').textContent = fmtPos(view.lat, view.lon);
-  const h = heightAt(view.lat, view.lon) * 1000;
-  $('hElev').textContent = `${h >= 0 ? '+' : '−'}${nf.format(Math.abs(Math.round(h / 10) * 10))} m`;
+  $('hAlt').textContent = fmtKm(camDist - R);
+  $('hAgl').textContent = fmtKm(camAgl);
+  $('hPos').textContent = fmtPos(camLat, camLon);
   const lh = localHour();
   $('hTime').textContent = $('vSun').textContent = fmtHour(lh);
   if (!sunDrag) sSun.value = lh;
@@ -788,6 +919,7 @@ function tick(now) {
   resize();
   updateCamera(dt);
   selectTiles();
+  city.update(now / 1000, camera, shared.uEx.value, focalPx, renderer.getPixelRatio());
   renderer.clear();
   renderer.render(sky, camera);
   renderer.clearDepth();
@@ -829,4 +961,4 @@ function probe() {                   // couleur au centre de l'image, juste apr�
   gl.readPixels(gl.drawingBufferWidth >> 1, gl.drawingBufferHeight >> 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
   return [...px];
 }
-window.mars = { probe, levels: () => shown.reduce((a, n) => (a[n.l] = (a[n.l] || 0) + 1, a), {}), view, sun, stats, heightAt, sampleLow, flyTo, shared, camera, get agl() { return camAgl; }, get ready() { return running; } };
+window.mars = { probe, SITE, anchor, lookAround, keys, get alt() { return camDist - R; }, levels: () => shown.reduce((a, n) => (a[n.l] = (a[n.l] || 0) + 1, a), {}), view, sun, stats, heightAt, sampleLow, flyTo, shared, camera, get agl() { return camAgl; }, get ready() { return running; } };

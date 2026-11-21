@@ -20,11 +20,11 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1
 #cv{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab;outline:none}
 #cv.drag{cursor:grabbing}
 #labels{position:fixed;inset:0;overflow:hidden;pointer-events:none}
-.lb{position:absolute;left:0;top:0;padding:6px 8px;font-size:12px;letter-spacing:.02em;color:var(--ice);white-space:nowrap;cursor:pointer;pointer-events:auto;
+.lb{position:absolute;left:0;top:0;padding:6px 8px;font-size:12px;letter-spacing:.02em;color:var(--ice);white-space:nowrap;pointer-events:none;
   text-shadow:0 0 4px #000,0 0 2px #000,0 1px 8px #000;background:none;border:0;font-family:inherit;will-change:transform}
 .lb::before{content:"";position:absolute;left:-3px;top:50%;width:5px;height:5px;margin-top:-3px;border-radius:50%;border:1px solid var(--ice)}
 .lb.site{color:var(--amber)}.lb.site::before{border-color:var(--amber)}
-.lb:hover{color:#fff}
+.lb.city{color:#fff;font-weight:600;letter-spacing:.06em}.lb.city::before{border-color:#fff;background:#fff}
 #top{position:fixed;left:68px;top:calc(var(--st) + 8px);height:44px;display:flex;align-items:center;pointer-events:none}
 #top h1{margin:0;font-size:17px;font-weight:600;letter-spacing:.14em;text-transform:uppercase}
 #hud{position:fixed;left:14px;bottom:calc(var(--sb) + 30px);display:grid;grid-template-columns:auto auto;gap:1px 12px;font-size:13px;pointer-events:none;text-shadow:0 0 4px #000,0 0 2px #000}
@@ -33,7 +33,7 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1
 #credit{position:fixed;left:14px;right:14px;bottom:calc(var(--sb) + 8px);font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 #credit a{color:inherit;pointer-events:auto}
 #side{position:fixed;right:12px;bottom:calc(var(--sb) + 30px);display:grid;gap:8px;justify-items:end;max-width:calc(100vw - 24px)}
-#panel{width:270px;max-width:100%;padding:12px 14px;display:grid;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+#panel{width:290px;max-height:calc(100vh - 150px);overflow:auto;max-width:100%;padding:12px 14px;display:grid;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 #panel[hidden]{display:none}
 #panel label{display:grid;gap:2px;font-size:13px;color:var(--dim)}
 #panel label span{display:flex;justify-content:space-between}
@@ -63,8 +63,8 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 
 <dl id="hud">
   <dt>Altitude</dt><dd id="hAlt">–</dd>
-  <dt>Visée</dt><dd id="hPos">–</dd>
-  <dt>Sol visé</dt><dd id="hElev">–</dd>
+  <dt>Au-dessus du sol</dt><dd id="hAgl">–</dd>
+  <dt>Position</dt><dd id="hPos">–</dd>
   <dt>Heure solaire</dt><dd id="hTime">–</dd>
 </dl>
 
@@ -81,7 +81,11 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
       <button class="b" id="bGlobe">Vue globale</button>
       <button class="b" id="bNorth">Nord en haut</button>
     </div>
-    <p>Glisser : tourner. Molette ou pincement : descendre. Clic droit ou deux doigts : incliner et pivoter. Double-clic : y aller.</p>
+    <div class="row">
+      <button class="b" id="bCity">Nouvelle-Arès</button>
+      <button class="b" id="bLook" aria-pressed="false" title="Glisser tourne la caméra sur place au lieu de déplacer">Regarder</button>
+    </div>
+    <p>Glisser : se déplacer, à altitude constante. Molette ou pincement : avancer vers le point visé. Clic droit ou deux doigts : tourner autour. Maj + glisser, ou « Regarder » : tourner la caméra sur place. Clavier : ZQSD ou WASD pour voler, R et F pour monter et descendre, flèches pour regarder, Maj pour accélérer. Double-clic : y aller.</p>
   </div>
   <button class="b" id="bPanel" aria-expanded="true" aria-controls="panel">Réglages</button>
 </div>

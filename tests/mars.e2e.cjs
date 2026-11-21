@@ -30,6 +30,33 @@ test('Mars : globe affiché, altitudes MOLA exactes, descente au zoom', async ({
   expect(errors).toEqual([]);
 });
 
+test('Mars : se déplacer garde l’altitude, la ville est là', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', e => errors.push(String(e)));
+  await page.goto('/mars/index.html');
+  await page.waitForFunction(() => window.mars && window.mars.ready, null, { timeout: 60_000 });
+  // Au bord de Valles Marineris, à basse altitude, cap au sud : le sol va s'effondrer sous la caméra.
+  await page.evaluate(() => { const m = window.mars; m.sun.speed = 0; document.getElementById('panel').hidden = true; m.flyTo(-8.6, -70, 30, false, Math.PI); m.view.rate = 60; });
+  await page.waitForFunction(() => Math.abs(window.mars.view.dist - 30) < 0.01, null, { timeout: 60_000 });
+  const pose = () => page.evaluate(() => ({ alt: window.mars.alt, agl: window.mars.agl, lat: window.mars.view.lat }));
+  const a = await pose();
+  await page.mouse.move(200, 250); await page.mouse.down(); await page.mouse.move(200, 600, { steps: 8 }); await page.mouse.up();
+  await expect.poll(async () => (await pose()).lat, { timeout: 30_000 }).toBeLessThan(a.lat - 0.3);
+  const b = await pose();
+  expect(Math.abs(b.alt - a.alt)).toBeLessThan(0.001);        // même altitude au-dessus du niveau zéro
+  // Regarder autour de soi ne déplace pas la caméra.
+  const before = await page.evaluate(() => window.mars.camera.position.toArray());
+  await page.evaluate(() => window.mars.lookAround(0.6, -0.4));
+  await page.waitForTimeout(300);
+  const after = await page.evaluate(() => window.mars.camera.position.toArray());
+  for (let i = 0; i < 3; i++) expect(Math.abs(after[i] - before[i])).toBeLessThan(0.01);
+  // Le site de la ville est un plateau, et ses noms existent.
+  const flat = await page.evaluate(() => { const S = window.mars.SITE; return [0, 0.2, -0.3].map(d => window.mars.heightAt(S.lat + d, S.lon - d)); });
+  for (const h of flat) expect(h).toBeCloseTo(-4.75, 5);
+  await expect(page.locator('.lb.city')).toHaveCount(4);
+  expect(errors).toEqual([]);
+});
+
 test('Menu : on passe des satellites à Mars et retour', async ({ page }) => {
   await page.route('https://**', r => r.abort());
   await page.goto('/index.html');

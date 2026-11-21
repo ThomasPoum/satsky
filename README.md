@@ -53,6 +53,8 @@ Les gros groupes sont préparés par tranches et le calcul SGP4 est étalé sur 
 - **Niveaux de détail** : un arbre de tuiles charge des données plus fines à mesure qu'on s'approche (981 tuiles, 20 Mo en tout, quelques centaines de ko pour la vue globale).
 - **Soleil et atmosphère** : heure solaire, saison, rotation de la planète, brume de poussière, lueur bleue du coucher de Soleil.
 - **Lieux** : volcans, bassins, sites d'atterrissage ; un clic y emmène.
+- **Vol** : glisser déplace à altitude constante (on ne plonge pas dans les ravins), clic droit ou deux doigts pour tourner autour du point visé, Maj + glisser ou le bouton « Regarder » pour tourner la caméra sur place, ZQSD/WASD, R et F au clavier.
+- **Nouvelle-Arès** : une ville imaginaire au fond de Melas Chasma (11,2° S, 70° O), construite par programme dans `mars/city.js` : dômes, tours, astroport, et deux bases militaires. Le terrain y est aplani ; tout le reste de la planète est conforme aux mesures.
 
 Sous 2 km par point environ, le sol est complété par un grain fractal : ce détail-là n'est pas mesuré.
 
