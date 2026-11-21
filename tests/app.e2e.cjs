@@ -4,9 +4,12 @@ const F = require('./fixtures.cjs');
 // Une cinquantaine de satellites fictifs en orbite basse, répartis tout autour du ciel
 function fakeTLE() {
   const out = [F.ISS];
-  for (let i = 0; i < 50; i++) {
-    const id = String(40000 + i).padStart(5, '0'), raan = (i * 7.3 % 360).toFixed(4).padStart(8), ma = (i * 37 % 360).toFixed(4).padStart(8);
-    out.push([`SAT-${i}`, `1 ${id}U 20001A   26324.50000000  .00001000  00000-0  10000-3 0  9990`, `2 ${id}  53.0000 ${raan} 0001000  90.0000 ${ma} 15.06000000100000`]);
+  // 800 satellites répartis pseudo-aléatoirement (graine fixe) : à toute heure, plusieurs sont haut dans le ciel de Paris
+  let seed = 42; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (let i = 0; i < 800; i++) {
+    const id = String(80000 + i).padStart(5, '0'), inc = (40 + rnd() * 60).toFixed(4).padStart(8);
+    const raan = (rnd() * 360).toFixed(4).padStart(8), ma = (rnd() * 360).toFixed(4).padStart(8);
+    out.push([`SAT-${i}`, `1 ${id}U 20001A   26324.50000000  .00001000  00000-0  10000-3 0  9990`, `2 ${id} ${inc} ${raan} 0001000  90.0000 ${ma} 15.06000000100000`]);
   }
   return F.tle(...out);
 }
@@ -73,6 +76,7 @@ test('lâcher une cible efface ses infos et ne la reverrouille pas', async ({ pa
 test('viser un autre satellite libère le précédent puis verrouille le nouveau', async ({ page }) => {
   await setup(page);
   await page.click('#go');
+  expect(await page.evaluate(() => window.__satsky.sats.filter(s => s.el > 8).length), 'au moins deux satellites hauts').toBeGreaterThan(1);
   await aimAt(page, HIGHEST);
   await expect(page.locator('#bClear')).toHaveText('Lâcher', { timeout: 6000 });
   // enregistre, image par image, la cible verrouillée (indépendant de la vitesse de la machine)
