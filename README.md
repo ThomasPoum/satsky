@@ -45,6 +45,19 @@ La GitHub Action `Orbites (miroir CelesTrak)` télécharge donc chaque groupe **
 
 Les gros groupes sont préparés par tranches et le calcul SGP4 est étalé sur plusieurs images (environ 6 ms par image). La visée reste fluide même avec les quelque 9 000 satellites Starlink.
 
+## Mars en 3D
+
+👉 **https://thomaspoum.github.io/satsky/mars/** : une planète Mars autour de laquelle on tourne, et sur laquelle on descend en zoomant.
+
+- **Relief réel** : altimétrie laser MOLA (Mars Global Surveyor, NASA), 1,85 km par point, dans la géométrie et dans l'éclairage. L'exagération se règle de ×1 à ×10.
+- **Niveaux de détail** : un arbre de tuiles charge des données plus fines à mesure qu'on s'approche (981 tuiles, 20 Mo en tout, quelques centaines de ko pour la vue globale).
+- **Soleil et atmosphère** : heure solaire, saison, rotation de la planète, brume de poussière, lueur bleue du coucher de Soleil.
+- **Lieux** : volcans, bassins, sites d'atterrissage ; un clic y emmène.
+
+Sous 2 km par point environ, le sol est complété par un grain fractal : ce détail-là n'est pas mesuré.
+
+Les tuiles de `mars/data` se refabriquent avec `python3 scripts/build-mars.py megt90n000fb.img 8k_mars.jpg mars/data` (sources : [MOLA MEGDR](https://pds-geosciences.wustl.edu/missions/mgs/megdr.html), domaine public ; [carte couleur Solar System Scope](https://www.solarsystemscope.com/textures/), CC BY 4.0). Le rendu utilise [three.js](https://threejs.org) (MIT).
+
 ## Lancer en local
 
 ```bash

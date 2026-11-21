@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#05070f">
+<link rel="icon" href="../icons/icon-192.png">
+<title>Mars en 3D</title>
+<style>
+/*
+VOICE  calme, nocturne, instrument d'observation
+IDEA   la planète seule dans le noir, les réglages se font oublier
+COLOUR nuit #05070f, ambre #ffcf5c pour les valeurs, bleu glacier #8fb8ff pour les noms de lieux
+LAYOUT canevas plein écran, mesures en bas à gauche, réglages repliables en bas à droite
+*/
+:root{--bg:#05070f;--panel:rgba(10,14,28,.78);--line:rgba(160,190,255,.22);--ink:#e8eefc;--dim:#8a96b3;--amber:#ffcf5c;--ice:#8fb8ff;
+--st:env(safe-area-inset-top,0px);--sb:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box;min-width:0;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;overscroll-behavior:none}
+#cv{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab;outline:none}
+#cv.drag{cursor:grabbing}
+#labels{position:fixed;inset:0;overflow:hidden;pointer-events:none}
+.lb{position:absolute;left:0;top:0;padding:6px 8px;font-size:12px;letter-spacing:.02em;color:var(--ice);white-space:nowrap;cursor:pointer;pointer-events:auto;
+  text-shadow:0 0 4px #000,0 0 2px #000,0 1px 8px #000;background:none;border:0;font-family:inherit;will-change:transform}
+.lb::before{content:"";position:absolute;left:-3px;top:50%;width:5px;height:5px;margin-top:-3px;border-radius:50%;border:1px solid var(--ice)}
+.lb.site{color:var(--amber)}.lb.site::before{border-color:var(--amber)}
+.lb:hover{color:#fff}
+#top{position:fixed;left:0;top:0;padding:calc(var(--st) + 10px) 14px;display:flex;gap:12px;align-items:baseline;pointer-events:none}
+#top h1{margin:0;font-size:17px;font-weight:600;letter-spacing:.14em;text-transform:uppercase}
+#top a{color:var(--dim);font-size:13px;text-decoration:none;pointer-events:auto}
+#top a:hover{color:var(--ink)}
+#hud{position:fixed;left:14px;bottom:calc(var(--sb) + 30px);display:grid;grid-template-columns:auto auto;gap:1px 12px;font-size:13px;pointer-events:none;text-shadow:0 0 4px #000,0 0 2px #000}
+#hud dt{color:var(--dim)}
+#hud dd{margin:0;color:var(--amber);font-variant-numeric:tabular-nums;white-space:nowrap}
+#credit{position:fixed;left:14px;right:14px;bottom:calc(var(--sb) + 8px);font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+#credit a{color:inherit;pointer-events:auto}
+#side{position:fixed;right:12px;bottom:calc(var(--sb) + 30px);display:grid;gap:8px;justify-items:end;max-width:calc(100vw - 24px)}
+#panel{width:270px;max-width:100%;padding:12px 14px;display:grid;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+#panel[hidden]{display:none}
+#panel label{display:grid;gap:2px;font-size:13px;color:var(--dim)}
+#panel label span{display:flex;justify-content:space-between}
+#panel label b{color:var(--amber);font-weight:500;font-variant-numeric:tabular-nums}
+#panel p{margin:0;font-size:12px;color:var(--dim)}
+input[type=range]{width:100%;margin:0;height:28px;accent-color:var(--amber);background:none}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+button.b{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:10px;min-height:40px;padding:0 12px;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+button.b:hover{border-color:var(--ice)}
+button.b[aria-pressed=true]{border-color:var(--amber);color:var(--amber)}
+button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.row button.b{flex:1}
+#load{position:fixed;inset:0;display:grid;place-content:center;justify-items:center;gap:14px;background:var(--bg);transition:opacity .6s}
+#load.done{opacity:0;pointer-events:none}
+#load p{margin:0;color:var(--dim);letter-spacing:.08em;max-width:80vw;text-align:center}
+#bar{width:180px;height:2px;background:var(--line)}
+#bar i{display:block;height:100%;width:0;background:var(--amber);transition:width .2s}
+@media (max-width:640px){#hud{font-size:12px}#panel{width:250px}}
+@media (prefers-reduced-motion:reduce){#load{transition:none}}
+</style>
+</head>
+<body>
+<canvas id="cv" tabindex="0" aria-label="Mars en 3D. Glisser pour tourner, molette ou pincement pour zoomer."></canvas>
+<div id="labels"></div>
+
+<div id="top"><h1>Mars</h1><a href="../">SatSky</a></div>
+
+<dl id="hud">
+  <dt>Altitude</dt><dd id="hAlt">–</dd>
+  <dt>Visée</dt><dd id="hPos">–</dd>
+  <dt>Sol visé</dt><dd id="hElev">–</dd>
+  <dt>Heure solaire</dt><dd id="hTime">–</dd>
+</dl>
+
+<div id="side">
+  <div id="panel">
+    <label><span>Relief <b id="vEx"></b></span><input id="sEx" type="range" min="1" max="10" step="0.5" value="3"></label>
+    <label><span>Heure solaire au centre <b id="vSun"></b></span><input id="sSun" type="range" min="0" max="24" step="0.05"></label>
+    <label><span>Saison <b id="vLs"></b></span><input id="sLs" type="range" min="0" max="359" step="1" value="70"></label>
+    <div class="row">
+      <button class="b" id="bSpeed" title="Vitesse de rotation de Mars"></button>
+      <button class="b" id="bNames" aria-pressed="true">Noms</button>
+    </div>
+    <div class="row">
+      <button class="b" id="bGlobe">Vue globale</button>
+      <button class="b" id="bNorth">Nord en haut</button>
+    </div>
+    <p>Glisser : tourner. Molette ou pincement : descendre. Clic droit ou deux doigts : incliner et pivoter. Double-clic : y aller.</p>
+  </div>
+  <button class="b" id="bPanel" aria-expanded="true" aria-controls="panel">Réglages</button>
+</div>
+
+<div id="credit">Relief : NASA MGS / MOLA (1,85 km par point). Couleur : <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a>, CC BY 4.0.</div>
+
+<div id="load"><p id="loadMsg">Mars arrive…</p><div id="bar"><i></i></div></div>
+
+<script type="module" src="mars.js"></script>
+</body>
+</html>
