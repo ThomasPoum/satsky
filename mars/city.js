@@ -2,7 +2,7 @@
 // Tout est construit par programme dans un repère plat local (km) : x vers l'est, y vers le haut, z vers le sud.
 // Le shader courbe ensuite l'ensemble sur la sphère, pour que chaque bâtiment reste posé au sol et vertical.
 
-export const SITE = { lat: -11.2, lon: -70.0, h: -4.75, flat0: 38, flat1: 54 };
+export const SITE = { lat: -11.2, lon: -70.0, h: -4.75, flat0: 42, flat1: 52, dike: -1.9 };
 
 const WHITE = [0.80, 0.80, 0.78], SAND = [0.52, 0.45, 0.39], TEAL = [0.12, 0.50, 0.52], COPPER = [0.66, 0.38, 0.20];
 const METAL = [0.20, 0.22, 0.25], STEEL = [0.62, 0.64, 0.68], OLIVE = [0.21, 0.24, 0.17], GUN = [0.17, 0.19, 0.21];
@@ -57,6 +57,17 @@ class Geo {
     for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) {
       const A = P(i, j), B = P(i + 1, j), C = P(i + 1, j + 1), D = P(i, j + 1);
       this.quad(A[0], B[0], C[0], D[0], col, par, A[1], B[1], C[1], D[1], A[2], B[2], C[2], D[2]);
+    }
+  }
+  /** Tore d'axe vertical : grand rayon R, rayon du tube r. */
+  torus(cx, cy, cz, R, r, n = 48, m = 12, col = WHITE, win = 0, glow = 0) {
+    const P = (i, j) => {
+      const a = i / n * 2 * Math.PI, b = j / m * 2 * Math.PI, ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b);
+      return [[cx + (R + r * cb) * ca, cy + r * sb, cz + (R + r * cb) * sa], [cb * ca, sb, cb * sa]];
+    };
+    for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) {
+      const A = P(i, j), B = P(i + 1, j), C = P(i + 1, j + 1), D = P(i, j + 1);
+      this.quad(A[0], B[0], C[0], D[0], col, [win, glow], A[1], B[1], C[1], D[1]);
     }
   }
   /** Cylindre entre deux points quelconques (tubes, mâts, canons). */
@@ -274,6 +285,40 @@ function layout() {
     g.box(x, 0.03, z, 0.13, 0.035, 0.08, 0, OLIVE); g.box(x, 0.065, z, 0.06, 0.025, 0.05, 0, GUN); g.tube([x, 0.08, z], [x + 0.12, 0.09, z], 0.006, 4, GUN);
   }
 
+  /* ── Terminal de l'ascenseur spatial, à l'ouest ── */
+  const [EX, EZ] = LIFT;
+  slab(g, EX, EZ, 5.2, [0.22, 0.22, 0.23], 2);
+  road(g, -17.2, 0.6, EX + 5, EZ - 0.4, 0.5);
+  g.cyl(EX, 0, EZ, 2.1, 1.5, 0.5, 32, WHITE, 0.6); g.cyl(EX, 0.5, EZ, 1.5, 0.55, 2.4, 32, WHITE, 0.8);
+  g.cyl(EX, 2.9, EZ, 0.55, 0.2, 3.2, 20, STEEL, 0.4); g.cyl(EX, 2.85, EZ, 0.9, 0.9, 0.08, 28, TEAL, 0, 1.3);
+  g.cyl(EX, 0.48, EZ, 1.75, 1.75, 0.06, 32, TEAL, 0, 1.1, false);
+  for (let k = 0; k < 6; k++) {
+    const a = k * Math.PI / 3 + 0.2, x = EX + Math.cos(a) * 3.9, z = EZ + Math.sin(a) * 3.9;
+    g.cyl(x, 0, z, 0.3, 0.22, 0.25, 10, METAL); g.tube([x, 0.25, z], [EX + Math.cos(a) * 0.35, 4.6, EZ + Math.sin(a) * 0.35], 0.035, 6, STEEL);
+    lamp(x, 0.32, z, CYAN, 0.08, 0, 0);
+    if (k % 2) { g.box(EX + Math.cos(a) * 2.9, 0, EZ + Math.sin(a) * 2.9, 0.9, 0.3, 0.5, -a, WHITE, 0.7); g.hangar(EX + Math.cos(a + 0.5) * 3.1, 0.02, EZ + Math.sin(a + 0.5) * 3.1, 0.9, 0.28, -a, STEEL, 0.1); }
+  }
+  for (let i = 0; i < 20; i++) lamp(EX + Math.cos(i * 0.314) * 2.15, 0.1, EZ + Math.sin(i * 0.314) * 2.15, CYAN, 0.045, 0, 0);
+  lamp(EX, 6.15, EZ, RED, 0.14, 0.8, 1);
+  // Port-Zénith : la petite ville au pied du câble. Aiguilles à halos, plateformes en lévitation, anneaux lumineux.
+  const MAGENTA = [1.0, 0.25, 0.85];
+  g.torus(EX, 4.4, EZ, 1.5, 0.06, 48, 6, CYAN, 0, 1.6); g.torus(EX, 1.3, EZ, 2.5, 0.05, 64, 6, MAGENTA, 0, 1.4); g.torus(EX, 5.4, EZ, 0.8, 0.04, 32, 6, CYAN, 0, 1.6);
+  for (let k = 0; k < 16; k++) {
+    const a = k / 16 * 2 * Math.PI + 0.1, r = 3.1 + (k % 3) * 0.62, x = EX + Math.cos(a) * r, z = EZ + Math.sin(a) * r;
+    if (Math.abs(Math.sin(a)) < 0.2 && Math.cos(a) > 0) continue;       // l'avenue vers la ville
+    const h = 1.1 + rnd() * 2.3, tint = k % 2 ? CYAN : MAGENTA;
+    g.cyl(x, 0, z, 0.17, 0.05, h, 10, HULL, 0.95); g.cyl(x, h, z, 0.05, 0.0, 0.35, 8, tint, 0, 1.5);
+    g.torus(x, h * 0.62, z, 0.3, 0.025, 20, 5, tint, 0, 1.6); g.torus(x, h * 0.3, z, 0.36, 0.02, 20, 5, tint, 0, 1.2);
+    lamp(x, h + 0.38, z, tint, 0.07, 0, 0);
+  }
+  for (let k = 0; k < 9; k++) {
+    const a = k / 9 * 2 * Math.PI + 0.45, r = 2.2 + (k % 2) * 1.5, x = EX + Math.cos(a) * r, z = EZ + Math.sin(a) * r, y = 0.8 + (k % 4) * 0.33;
+    g.cyl(x, y, z, 0.4, 0.4, 0.05, 20, HULL, 0, 0.25); g.cyl(x, y - 0.26, z, 0.04, 0.4, 0.26, 20, HULL); g.torus(x, y + 0.02, z, 0.41, 0.02, 24, 5, CYAN, 0, 1.5);
+    g.tube([x, 0, z], [x, y - 0.26, z], 0.012, 5, CYAN, 0.9);
+    glass.dome(x, y + 0.05, z, 0.33, 0.75, 16, 5, k % 2 ? [0.6, 0.9, 1.0] : [1.0, 0.6, 0.95]);
+    g.cyl(x, y + 0.05, z, 0.07, 0.03, 0.2, 8, WHITE, 0.9);
+  }
+
   /* ── Pièces mobiles : antenne de radar, navette ── */
   dish.dome(0, 0, 0, 0.5, 0.35, 16, 4, STEEL, 0, 0, true); dish.tube([0, 0.03, 0], [0, 0.42, 0], 0.012, 5, METAL); dish.cyl(0, -0.1, 0, 0.06, 0.06, 0.12, 8, GUN);
   flyer.craft(0, 0, 0, 1, 0, WHITE, 0.25);
@@ -283,8 +328,51 @@ function layout() {
 
   return {
     g, glass, dish, flyer, lights, movers,
-    places: [['Nouvelle-Arès', 0, 0, 1e6], ['Astroport', SX, SZ, 500], ['Bastion Nord · base aérienne', NX, NZ, 500], ['Bastion Sud · défense orbitale', MX, MZ, 500]],
+    places: [['Nouvelle-Arès', 0, 0, 1e6], ['Port-Zénith · ascenseur spatial', EX, EZ, 500], ['Astroport', SX, SZ, 500], ['Bastion Nord · base aérienne', NX, NZ, 500], ['Bastion Sud · défense orbitale', MX, MZ, 500]],
   };
+}
+
+/* ── Ascenseur spatial : un câble radial jusqu'à l'orbite stationnaire de Mars, et la station Zénith au bout ── */
+const LIFT = [-25.5, 3];            // pied du câble, dans le repère de la ville
+export const LIFT_H = 17032;        // altitude de l'orbite aréostationnaire, en km
+const HULL = [0.74, 0.76, 0.80], DARK = [0.10, 0.11, 0.13];
+
+/** Repère : origine au centre de la station, y le long du câble (vers l'espace). */
+function station() {
+  const hub = new Geo(), ringA = new Geo(), ringB = new Geo(), cable = new Geo(), car = new Geo(), lights = [];
+  const lamp = (x, y, z, col, size, blink = 0, kind = 1) => lights.push(x, y + LIFT_H, z, ...col, size, blink, kind);
+  // Moyeu, quais, contrepoids
+  hub.cyl(0, -16, 0, 3.0, 6.0, 6, 24, HULL, 0.5); hub.cyl(0, -10, 0, 6.0, 6.0, 20, 28, HULL, 0.85); hub.cyl(0, 10, 0, 6.0, 2.5, 7, 24, HULL, 0.5);
+  for (const y of [-9.5, -3, 3.5, 9.5]) hub.cyl(0, y, 0, 6.25, 6.25, 0.5, 28, TEAL, 0, 1.2, false);
+  hub.cyl(0, 17, 0, 0.9, 0.9, 40, 10, STEEL, 0, 0.05);
+  for (let y = 20; y < 56; y += 6) hub.cyl(0, y, 0, 2.0, 2.0, 0.6, 12, HULL, 0.4);
+  hub.dome(0, 62, 0, 9, 0.85, 20, 8, [0.30, 0.26, 0.24]); hub.dome(0, 62, 0, 9, -0.7, 20, 8, [0.27, 0.23, 0.22]);   // contrepoids : un astéroïde capturé
+  hub.cyl(0, -24, 0, 1.2, 3.0, 8, 16, HULL, 0.4);
+  for (let k = 0; k < 4; k++) {       // quais et vaisseaux amarrés
+    const a = k * Math.PI / 2 + 0.4, c = Math.cos(a), sn = Math.sin(a);
+    hub.tube([c * 6, -14, sn * 6], [c * 15, -14, sn * 15], 0.7, 8, HULL, 0.1); hub.box(c * 15, -14.8, sn * 15, 3.2, 1.6, 3.2, -a, HULL, 0.6);
+    hub.craft(c * 19.5, -14.4, sn * 19.5, k % 2 ? 3.2 : 4.4, -a + Math.PI, k % 2 ? WHITE : STEEL, 0.15);
+    lamp(c * 17, -13, sn * 17, k % 2 ? RED : [0.3, 1, 0.4], 0.9, 0.8 + k * 0.1);
+  }
+  for (let k = 0; k < 4; k++) {       // grands panneaux solaires
+    const a = k * Math.PI / 2, c = Math.cos(a), sn = Math.sin(a);
+    hub.tube([c * 6, 13, sn * 6], [c * 62, 13, sn * 62], 0.5, 6, STEEL);
+    for (const q of [22, 40, 58]) hub.box(c * q, 12.9, sn * q, 15, 0.25, 11, -a, SOLAR, 0, 1, 0.06);
+  }
+  lamp(0, 67, 0, RED, 1.6, 1.2); lamp(0, -24.5, 0, CYAN, 1.2, 0); lamp(0, 0, 0, [0.85, 0.92, 1.0], 150, 0, 3);
+  // Grande roue habitée et petite roue, en rotation
+  ringA.torus(0, 0, 0, 40, 3.6, 96, 14, HULL, 0.9); ringA.torus(0, 3.7, 0, 40, 0.5, 96, 6, TEAL, 0, 1.3); ringA.torus(0, -3.7, 0, 40, 0.5, 96, 6, TEAL, 0, 1.3);
+  for (let k = 0; k < 6; k++) {
+    const a = k * Math.PI / 3, c = Math.cos(a), sn = Math.sin(a);
+    ringA.tube([c * 6, 0, sn * 6], [c * 36.6, 0, sn * 36.6], 1.1, 8, HULL, 0.08); ringA.box(c * 40, 3.4, sn * 40, 5, 2.2, 5, -a, WHITE, 0.8);
+  }
+  ringB.torus(0, 0, 0, 21, 2.2, 64, 12, WHITE, 0.85); ringB.torus(0, 2.3, 0, 21, 0.35, 64, 6, COPPER, 0, 1.0);
+  for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2 + 0.6; ringB.tube([Math.cos(a) * 2, 0, Math.sin(a) * 2], [Math.cos(a) * 19, 0, Math.sin(a) * 19], 0.7, 8, WHITE, 0.08); }
+  for (let i = 0; i < 24; i++) lamp(Math.cos(i * 0.2618) * 43.8, 0, Math.sin(i * 0.2618) * 43.8, i % 3 ? [1, 0.9, 0.7] : CYAN, 0.7, 0);
+  // Câble (ruban) et cabine
+  cable.box(0, 5.9, 0, 0.16, LIFT_H - 30, 0.05, 0.3, [0.55, 0.6, 0.66], 0, 1, 0.12);
+  car.box(0, -0.5, 0, 0.5, 1.0, 0.5, 0.3, WHITE, 0.9); car.cyl(0, 0.5, 0, 0.36, 0.1, 0.4, 10, TEAL, 0, 0.9); car.cyl(0, -0.9, 0, 0.1, 0.36, 0.4, 10, TEAL, 0, 0.9);
+  return { hub, ringA, ringB, cable, car, lights };
 }
 
 /** Enceinte polygonale : murs, tours d'angle à tourelle, feux rouges. */
@@ -330,7 +418,7 @@ varying vec2 vPar, vUv;
 void main() {
   vec4 lp = uLocal * vec4(position, 1.0);
   vec3 b = bend(lp.xyz);
-  vLoc = lp.xyz; vNl = mat3(uLocal) * normal; vN = mat3(modelMatrix) * vNl;
+  vLoc = position; vNl = normal; vN = mat3(modelMatrix) * (mat3(uLocal) * normal);
   vCol = color; vPar = aPar; vUv = aUv;
   vPos = (modelMatrix * vec4(b, 1.0)).xyz;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(b, 1.0);
@@ -340,7 +428,7 @@ const solidFrag = atmo => /* glsl */`
 precision highp float;
 precision highp int;
 ${atmo}
-uniform float uNight, uPix, uTint;
+uniform float uNight, uPix, uTint, uSpace;
 varying vec3 vN, vNl, vCol, vLoc, vPos;
 varying vec2 vPar, vUv;
 float hash2(vec2 p) {
@@ -394,11 +482,15 @@ void main() {
   }
   emit += vCol * vPar.y * (0.35 + 0.9 * uNight);
 
-  float geo = dot(up, uSun);
-  float diff = max(dot(n, uSun), 0.0) * smoothstep(-0.03, 0.07, geo);
+  float geo = dot(up, uSun), shade = smoothstep(-0.03, 0.07, geo), ao = 0.65 + 0.35 * smoothstep(0.0, 0.25, vLoc.y);
+  if (uSpace > 0.5) {                       // en orbite : au soleil, sauf dans l'ombre de la planète
+    float along = dot(vPos, uSun);
+    shade = along < 0.0 && length(vPos - along * uSun) < RP ? 0.0 : 1.0;
+    geo = 1.0; ao = 1.0;
+  }
+  float diff = max(dot(n, uSun), 0.0) * shade;
   vec3 sunCol = mix(vec3(1.0, 0.62, 0.40) * 0.75, vec3(1.0, 0.97, 0.93), smoothstep(0.0, 0.4, geo)) * 1.9;
-  vec3 ambient = vec3(0.80, 0.58, 0.42) * 0.2 * smoothstep(-0.12, 0.25, geo) * (0.55 + 0.45 * dot(n, up)) + vec3(0.006, 0.007, 0.01);
-  float ao = 0.65 + 0.35 * smoothstep(0.0, 0.25, vLoc.y);
+  vec3 ambient = vec3(0.80, 0.58, 0.42) * 0.2 * smoothstep(-0.12, 0.25, geo) * (0.55 + 0.45 * dot(n, up)) * (1.0 - 0.7 * uSpace) + vec3(0.006, 0.007, 0.01);
   vec3 col = albedo * (diff * sunCol + ambient * ao) + emit;
   vec3 h = normalize(uSun + toCam / dist);
   col += sunCol * pow(max(dot(n, h), 0.0), 60.0) * 0.25 * step(0.0, geo) * step(0.001, vPar.x + uTint);
@@ -438,9 +530,10 @@ varying vec3 vC;
 void main() {
   vec3 b = bend(position);
   vec4 mv = modelViewMatrix * vec4(b, 1.0);
-  float dist = length(mv.xyz), px = aLamp.x / dist * uFocal, size = clamp(px, uMinPx, 80.0);
+  float dist = length(mv.xyz), px = aLamp.x / dist * uFocal, size = clamp(px, uMinPx * (aLamp.z > 2.5 ? 2.2 : 1.0), 80.0);
   float k = min(1.0, max(px / size, 0.35));
   if (aLamp.z < 0.5) k *= uNight;
+  else if (aLamp.z > 2.5) k *= 0.7 * smoothstep(400.0, 4000.0, dist);
   else if (aLamp.z > 1.5) k *= uNight * 0.6 * smoothstep(150.0, 900.0, dist);
   if (aLamp.y > 0.0) k *= 0.25 + 0.75 * smoothstep(0.55, 0.75, sin(uTime * 2.6 / aLamp.y + aLamp.y * 40.0));
   vC = aCol * k;
@@ -454,6 +547,8 @@ void main() {
   gl_FragColor = vec4(vC * max(f, 0.0) * 2.6, 1.0);
 }`;
 
+const carGeo = (S, THREE) => S.carBuilt || (S.carBuilt = S.car.build(THREE));
+
 /**
  * Construit la ville. `env` : { shared (uniformes communs), ATMO (source GLSL), R, dirOf }.
  * Renvoie { group, places, update(time, camera, ex, focalPx, dpr) }.
@@ -464,11 +559,11 @@ export function createCity(THREE, env) {
   group.matrixAutoUpdate = false;
   const up = dirOf(SITE.lat, SITE.lon), east = new THREE.Vector3(0, 1, 0).cross(up).normalize(), south = east.clone().cross(up);
   const own = { uRc: { value: R }, uNight: { value: 0 }, uTime: { value: 0 }, uFocal: { value: 1000 }, uMinPx: { value: 2 } };
-  const solid = (local, tint = 0) => new THREE.ShaderMaterial({
+  const solid = (local, tint = 0, set = null) => new THREE.ShaderMaterial({
     vertexShader: solidVert, fragmentShader: solidFrag(ATMO), side: THREE.DoubleSide,
-    uniforms: { ...shared, ...own, uLocal: { value: local }, uTint: { value: tint } },
+    uniforms: { ...shared, ...(set || own), uLocal: { value: local }, uTint: { value: tint }, uSpace: { value: set ? 1 : 0 } },
   });
-  const add = (geo, mat, order = 0) => { const m = new THREE.Mesh(geo, mat); m.frustumCulled = false; m.renderOrder = order; group.add(m); return m; };
+  const add = (geo, mat, order = 0, to = group) => { const m = new THREE.Mesh(geo, mat); m.frustumCulled = false; m.renderOrder = order; to.add(m); return m; };
 
   add(L.g.build(THREE), solid(new THREE.Matrix4()));
   add(L.glass.build(THREE), new THREE.ShaderMaterial({
@@ -476,15 +571,34 @@ export function createCity(THREE, env) {
     uniforms: { ...shared, ...own, uLocal: { value: new THREE.Matrix4() } },
   }), 1);
 
-  const n = L.lights.length / 9, lp = new Float32Array(n * 3), lc = new Float32Array(n * 3), ll = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) { lp.set(L.lights.slice(i * 9, i * 9 + 3), i * 3); lc.set(L.lights.slice(i * 9 + 3, i * 9 + 6), i * 3); ll.set(L.lights.slice(i * 9 + 6, i * 9 + 9), i * 3); }
-  const lg = new THREE.BufferGeometry();
-  lg.setAttribute('position', new THREE.BufferAttribute(lp, 3)); lg.setAttribute('aCol', new THREE.BufferAttribute(lc, 3)); lg.setAttribute('aLamp', new THREE.BufferAttribute(ll, 3));
-  const pts = new THREE.Points(lg, new THREE.ShaderMaterial({
-    vertexShader: lightVert, fragmentShader: lightFrag, uniforms: { ...shared, ...own },
-    blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
-  }));
-  pts.frustumCulled = false; pts.renderOrder = 2; group.add(pts);
+  const lamps = (list, set, to) => {
+    const n = list.length / 9, lp = new Float32Array(n * 3), lc = new Float32Array(n * 3), ll = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { lp.set(list.slice(i * 9, i * 9 + 3), i * 3); lc.set(list.slice(i * 9 + 3, i * 9 + 6), i * 3); ll.set(list.slice(i * 9 + 6, i * 9 + 9), i * 3); }
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.BufferAttribute(lp, 3)); lg.setAttribute('aCol', new THREE.BufferAttribute(lc, 3)); lg.setAttribute('aLamp', new THREE.BufferAttribute(ll, 3));
+    const pts = new THREE.Points(lg, new THREE.ShaderMaterial({
+      vertexShader: lightVert, fragmentShader: lightFrag, uniforms: { ...shared, ...set },
+      blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
+    }));
+    pts.frustumCulled = false; pts.renderOrder = 2; to.add(pts);
+  };
+  lamps(L.lights, own, group);
+
+  // Ascenseur et station : un repère à part, droit (pas de courbure), dessiné aussi au-delà du plan lointain de la caméra.
+  const S = station(), space = new THREE.Group();
+  space.matrixAutoUpdate = false;
+  const far = { uRc: { value: 1e12 }, uNight: { value: 0.9 }, uTime: own.uTime, uFocal: own.uFocal, uMinPx: own.uMinPx };
+  const atTop = new THREE.Matrix4().makeTranslation(0, LIFT_H, 0), spinA = new THREE.Matrix4(), spinB = new THREE.Matrix4();
+  add(S.hub.build(THREE), solid(atTop, 0, far), 0, space);
+  add(S.ringA.build(THREE), solid(spinA, 0, far), 0, space);
+  add(S.ringB.build(THREE), solid(spinB, 0, far), 0, space);
+  add(S.cable.build(THREE), solid(new THREE.Matrix4(), 0, far), 0, space);
+  const cars = [0, 0.37, 0.71].map(ph => { const mat = new THREE.Matrix4(); add(carGeo(S, THREE), solid(mat, 0, far), 0, space); return { mat, ph }; });
+  lamps(S.lights, far, space);
+  const line = new THREE.Line(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([0, 6, 0, 0, LIFT_H - 24, 0], 3)),
+    new THREE.LineBasicMaterial({ color: new THREE.Color(0.45, 0.62, 0.75), transparent: true, opacity: 0.7 }));
+  line.frustumCulled = false; space.add(line);
+  const foot = new THREE.Vector3(), fUp = new THREE.Vector3(), fEast = new THREE.Vector3(), fSouth = new THREE.Vector3(), top = new THREE.Vector3();
 
   const dishGeo = L.dish.build(THREE), flyGeo = L.flyer.build(THREE);
   for (const m of L.movers) {
@@ -494,17 +608,28 @@ export function createCity(THREE, env) {
   const rot = new THREE.Matrix4(), tmp = new THREE.Matrix4(), center = new THREE.Vector3();
 
   return {
-    group,
-    places: L.places.map(([name, x, z, far]) => { const lat = SITE.lat - z / (R * Math.PI / 180); return [name, lat, SITE.lon + x / (R * Math.PI / 180 * Math.cos(lat * Math.PI / 180)), far, 2]; }),
+    group, space, stationCenter: top,
+    places: [...L.places, ['Station Zénith', LIFT[0], LIFT[1], 1e6, LIFT_H]].map(([name, x, z, far, alt = 0]) => { const lat = SITE.lat - z / (R * Math.PI / 180); return [name, lat, SITE.lon + x / (R * Math.PI / 180 * Math.cos(lat * Math.PI / 180)), far, 2, alt]; }),
     update(time, camera, ex, focalPx, dpr) {
       const rc = R + ex * SITE.h;
       center.copy(up).multiplyScalar(rc);
+      own.uTime.value = time; own.uFocal.value = focalPx; own.uMinPx.value = 2.4 * dpr;
+      // Pied du câble : le point (LIFT) de la ville, replié sur la sphère comme le fait le shader.
+      const [lx, lz] = LIFT, d2 = lx * lx + lz * lz, k = 1 - d2 / (2 * rc * rc);
+      foot.copy(center).addScaledVector(east, lx * k).addScaledVector(south, lz * k).addScaledVector(up, -d2 / (2 * rc));
+      fUp.copy(foot).normalize(); fEast.copy(east).addScaledVector(fUp, -east.dot(fUp)).normalize(); fSouth.copy(fEast).cross(fUp);
+      space.matrix.makeBasis(fEast, fUp, fSouth).setPosition(foot);
+      space.matrixWorld.copy(space.matrix);
+      for (const c of space.children) c.matrixWorld.copy(space.matrix);
+      top.copy(foot).addScaledVector(fUp, LIFT_H);
+      spinA.makeRotationY(time * 0.05).setPosition(0, LIFT_H, 0); spinB.makeRotationY(-time * 0.09).setPosition(0, LIFT_H + 13, 0);
+      cars.forEach((c, i) => c.mat.makeTranslation(0, i < 2 ? 8 + ((time * 0.6 + c.ph * 400) % 400) : LIFT_H - 40 - ((time * 0.6) % 300), 0));
       group.visible = camera.position.distanceTo(center) < 5000;
       if (!group.visible) return;
       group.matrix.makeBasis(east, up, south).setPosition(center);
       group.matrixWorld.copy(group.matrix);
       for (const c of group.children) c.matrixWorld.copy(group.matrix);
-      own.uRc.value = rc; own.uTime.value = time; own.uFocal.value = focalPx; own.uMinPx.value = 2.4 * dpr;
+      own.uRc.value = rc;
       own.uNight.value = 1 - Math.min(1, Math.max(0, (up.dot(shared.uSun.value) + 0.04) / 0.2));
       for (const m of L.movers) {
         if (m.kind === 'radar') m.mat.makeRotationY(time * m.speed).multiply(rot.makeRotationZ(m.tilt)).setPosition(m.x, m.y, m.z);

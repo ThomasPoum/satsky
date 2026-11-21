@@ -1,7 +1,7 @@
 const { test, expect } = require('@playwright/test');
 
 // Mars en 3D : la page charge ses tuiles locales, affiche la planète et répond au zoom.
-test.setTimeout(120_000);
+test.setTimeout(300_000);
 
 test('Mars : globe affiché, altitudes MOLA exactes, descente au zoom', async ({ page }) => {
   const errors = [];
@@ -53,7 +53,17 @@ test('Mars : se déplacer garde l’altitude, la ville est là', async ({ page }
   // Le site de la ville est un plateau, et ses noms existent.
   const flat = await page.evaluate(() => { const S = window.mars.SITE; return [0, 0.2, -0.3].map(d => window.mars.heightAt(S.lat + d, S.lon - d)); });
   for (const h of flat) expect(h).toBeCloseTo(-4.75, 5);
-  await expect(page.locator('.lb.city')).toHaveCount(4);
+  await expect(page.locator('.lb.city')).toHaveCount(6);
+  // Terraformation : les plaines du nord, sous le rivage d'Arabia, deviennent un océan ; la ville reste au sec.
+  await page.evaluate(() => { const m = window.mars; m.flyTo(62, -30, 6000); m.view.tiltGoal = 0; m.sun.lon = -30; m.sun.ls = 90; m.view.rate = 60; });
+  await page.waitForFunction(() => Math.abs(window.mars.view.dist - 6000) < 5, null, { timeout: 30_000 });
+  const dry = await page.evaluate(() => window.mars.probe());
+  expect(dry[0]).toBeGreaterThan(dry[2] + 20);
+  await page.evaluate(() => { window.mars.setTerra(1); window.mars.shared.uWet.value = 0.2; });      // peu d'humidité : pas de nuages devant
+  const wet = await page.evaluate(() => window.mars.probe());
+  expect(wet[2]).toBeGreaterThan(wet[0] + 20);
+  expect(await page.evaluate(() => window.mars.shared.uSea.value)).toBeCloseTo(-2.09, 5);
+  await page.evaluate(() => window.mars.setTerra(0));
   // Depuis la vue globale, un clic sur le nom de la ville y emmène (et pas chez un voisin).
   await page.evaluate(() => { const m = window.mars; m.flyTo(2, -92, 11500); m.view.rate = 60; });
   const name = page.locator('.lb.city', { hasText: 'Nouvelle-Arès' });

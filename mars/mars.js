@@ -1,7 +1,7 @@
 // Mars en 3D : globe à niveaux de détail, relief MOLA réel, atmosphère poussiéreuse, Soleil.
 // Repère : celui de la planète (fixe). Y = pôle nord, longitude 0 sur +X, l'est vers -Z. Unité : le kilomètre.
 import * as THREE from './three.module.min.js';
-import { SITE, createCity } from './city.js?v=4';
+import { SITE, createCity } from './city.js?v=5';
 
 const R = 3389.5, DEG = Math.PI / 180;
 const SEG = 48;            // segments par côté de tuile
@@ -52,7 +52,9 @@ const siteDir = dirOf(SITE.lat, SITE.lon), siteTmp = new THREE.Vector3();
 function leveled(h, lat, lon) {
   if (Math.abs(lat - SITE.lat) > 1.2 || Math.abs(wrap180(lon - SITE.lon)) > 1.2) return h;
   const d = Math.acos(Math.min(1, dirOf(lat, lon, siteTmp).dot(siteDir))) * R;
-  return h + (SITE.h - h) * (1 - smooth(SITE.flat0, SITE.flat1, d));
+  h += (SITE.h - h) * (1 - smooth(SITE.flat0, SITE.flat1, d));
+  // La Grande Digue : un anneau plus haut que la mer future, qui garde la ville au sec.
+  return Math.max(h, SITE.h + (SITE.dike - SITE.h) * smooth(52, 58, d) * (1 - smooth(60, 66, d)));
 }
 function sampleLow(lat, lon) {
   const fx = clamp((wrap180(lon) + 180) * 4, 0, 1440), fy = clamp((90 - lat) * 4, 0, 720);
@@ -108,11 +110,15 @@ const shared = {
   uHs: { value: 11 },
   uPix: { value: 0.001 },      // angle d'un pixel, en radians
   uCity: { value: siteDir },
+  uTerra: { value: 0 },        // avancement de la terraformation, de 0 à 1
+  uSea: { value: -20 },        // niveau de la mer, en km par rapport au niveau zéro
+  uWet: { value: 0 },          // humidité : lacs, fleuves, végétation
+  uTime: { value: 0 },
 };
 
 const ATMO = /* glsl */`
 uniform vec3 uSun, uCam;
-uniform float uHs, uEx;
+uniform float uHs, uEx, uTerra;
 const float RP = 3389.5;
 vec2 hitSphere(vec3 ro, vec3 rd, float r) {
   float b = dot(ro, rd), c = dot(ro, ro) - r * r, h = b * b - c;
@@ -126,7 +132,7 @@ vec4 atmosphere(vec3 ro, vec3 rd, float tmax, int steps) {
   vec2 t = hitSphere(ro, rd, RP + 7.0 * uHs);
   float t0 = max(t.x, 0.0), t1 = min(t.y, tmax);
   if (t1 <= t0) return vec4(0.0, 0.0, 0.0, 1.0);
-  float dt = (t1 - t0) / float(steps), beta = 0.1 / uHs, od = 0.0;
+  float dt = (t1 - t0) / float(steps), beta = mix(0.1, 0.13, uTerra) / uHs, od = 0.0;
   float cs = dot(rd, uSun), fwd = max(cs, 0.0);
   float broad = 0.75 + 0.5 * fwd * fwd * fwd, glow = pow(fwd, 60.0) * 2.0 + pow(fwd, 12.0) * 0.22;
   vec3 sum = vec3(0.0);
@@ -137,7 +143,8 @@ vec4 atmosphere(vec3 ro, vec3 rd, float tmax, int steps) {
     float dens = exp(-h / uHs), mu = dot(p, uSun) / r;
     float lit = smoothstep(-0.05, 0.12, mu + sqrt(2.0 * max(h, 0.0) / RP));
     float low = 1.0 - smoothstep(0.0, 0.35, mu);
-    vec3 c = vec3(0.80, 0.56, 0.38) * broad * mix(1.0, 0.45, low) + vec3(0.32, 0.50, 0.95) * glow * (0.25 + low);
+    vec3 c = mix(vec3(0.80, 0.56, 0.38), vec3(0.20, 0.40, 0.92), uTerra) * broad * mix(1.0, 0.45, low)
+      + mix(vec3(0.32, 0.50, 0.95), vec3(1.0, 0.50, 0.22), uTerra) * glow * (0.25 + low);
     od += dens * dt * 0.5;
     sum += exp(-beta * od) * dens * dt * lit * c;
     od += dens * dt * 0.5;
@@ -150,11 +157,15 @@ vec3 display(vec3 c) { c = 1.0 - exp(-c * 1.25); return pow(c * c * (3.0 - 2.0 *
 const terrainVert = /* glsl */`
 attribute vec3 aUp;
 attribute float aH, aSkirt;
-uniform float uEx, uSkirt;
+uniform float uEx, uSkirt, uSea;
+uniform vec3 uCity;
 varying vec2 vUv;
 varying vec3 vPos;
+varying float vH;
 void main() {
-  vec3 p = position + aUp * (aH * uEx - aSkirt * uSkirt * max(uEx, 1.0));
+  float h = length(aUp - uCity) * 3389.5 < 59.0 ? aH : max(aH, uSea);      // pas de mer dans le polder de la ville
+  vH = aH;
+  vec3 p = position + aUp * (h * uEx - aSkirt * uSkirt * max(uEx, 1.0));
   vUv = uv;
   vPos = (modelMatrix * vec4(p, 1.0)).xyz;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
@@ -166,8 +177,11 @@ precision highp int;
 ${ATMO}
 uniform sampler2D tColor, tNorm;
 uniform vec4 uCx, uNx;        // échelle (xy) et décalage (zw) vers la tuile de couleur / de pentes
-uniform float uSmooth, uPix;
+uniform float uSmooth, uPix, uSea, uWet, uTime;
 uniform vec3 uCity;
+uniform sampler2D tRiver, tLake;
+uniform vec4 uWx;
+varying float vH;
 varying vec2 vUv;
 varying vec3 vPos;
 
@@ -212,8 +226,44 @@ void main() {
   float se, sn;
   if (uSmooth > 0.5) { se = slope(bicubic(pn)); sn = slope(bicubic(pn2)); }
   else { se = slope(texture2D(tNorm, pn / sz).r); sn = slope(texture2D(tNorm, pn2 / sz).r); }
-  float level = smoothstep(38.0, 54.0, length(up - uCity) * RP);      // plateau de la ville : plus de pentes
+  float cityD = length(up - uCity) * RP, level = smoothstep(50.0, 66.0, cityD);      // plateau de la ville : plus de pentes
   se *= level; sn *= level;
+  if (cityD < 68.0 && cityD > 50.0) {       // flancs de la digue
+    float f1 = smoothstep(52.0, 58.0, cityD + 0.5) * (1.0 - smoothstep(60.0, 66.0, cityD + 0.5)), f0 = smoothstep(52.0, 58.0, cityD - 0.5) * (1.0 - smoothstep(60.0, 66.0, cityD - 0.5));
+    vec3 away = normalize(up - uCity * dot(up, uCity));
+    float sr = (f1 - f0) * ${(2.85).toFixed(2)};
+    se += sr * dot(away, east); sn += sr * dot(away, north);
+    albedo = mix(albedo, vec3(0.42, 0.40, 0.39), smoothstep(52.0, 55.0, cityD) * (1.0 - smoothstep(63.0, 66.0, cityD)) * 0.8);
+  }
+
+  // ── Terraformation : eau dans les creux, végétation selon la latitude, l'altitude et l'humidité ──
+  float water = 0.0, ice = 0.0, depthKm = 0.0;
+  if (uWet > 0.0) {
+    vec2 uw = uWx.zw + vUv * uWx.xy;
+    float riv = texture2D(tRiver, uw).r, lk = texture2D(tLake, uw).r, sinLat = abs(up.y);
+    float coast = noised(vPos / 23.0).x * 0.035;
+    float sea = step(vH + coast, uSea);
+    float lake = smoothstep(1.0 - 0.72 * uWet, 1.03 - 0.72 * uWet, lk) * step(0.004, lk);
+    float thr = mix(0.92, 0.3, uWet), river = smoothstep(thr, thr + 0.1, riv) * (1.0 - smoothstep(6.0, 7.5, vH));
+    water = cityD < 59.0 ? 0.0 : max(sea, max(lake, river));
+    depthKm = max(uSea - vH, 0.0) * sea + 0.3 * (1.0 - sea);
+    float elev = max(vH - max(uSea, -4.5), 0.0);
+    vec4 n1 = noised(vPos / 260.0), n2 = noised(vPos / 70.0 + 9.0);
+    float temp = mix(-0.75, 1.05, uTerra) - sinLat * sinLat * 1.25 - elev * 0.085 + 0.08 * n2.x;
+    float moist = clamp(0.72 - elev * 0.065 + 0.3 * n1.x + 0.12 * n2.x + riv * 0.5 + lk, 0.0, 1.0) * uWet;
+    float bare = smoothstep(0.18, 0.5, length(vec2(se, sn)));
+    float green = smoothstep(-0.05, 0.3, temp) * smoothstep(0.2, 0.5, moist) * (1.0 - bare);
+    float lum = clamp(dot(albedo, vec3(0.3, 0.55, 0.15)) / 0.22, 0.4, 1.8);
+    vec3 veg = mix(vec3(0.20, 0.19, 0.10), vec3(0.15, 0.25, 0.07), smoothstep(0.45, 0.75, uTerra) * smoothstep(0.1, 0.45, temp));     // lichens et toundra, puis prairie
+    veg = mix(veg, vec3(0.035, 0.12, 0.04), smoothstep(0.25, 0.6, temp) * smoothstep(0.5, 0.78, moist) * smoothstep(0.55, 0.9, uTerra));   // forêt
+    albedo = mix(albedo, veg * (0.5 + 0.55 * lum), green);
+    float snow = smoothstep(-0.32, -0.55, temp) * smoothstep(0.25, 0.7, uWet) * (1.0 - smoothstep(9.0, 12.0, vH)) * smoothstep(0.15, 0.4, moist + 0.3);
+    albedo = mix(albedo, vec3(0.88, 0.90, 0.93), snow * 0.9 * (1.0 - bare * 0.6));
+    ice = water * smoothstep(-0.25, -0.45, temp);
+    vec3 wcol = mix(vec3(0.04, 0.24, 0.30), vec3(0.008, 0.05, 0.16), smoothstep(0.0, 1.0, depthKm));
+    albedo = mix(albedo, mix(wcol, vec3(0.82, 0.88, 0.93), ice), water);
+    se *= 1.0 - water; sn *= 1.0 - water;
+  }
 
   // De près, les données (1,85 km par point) ne suffisent plus : un grain fractal prend le relais,
   // plus marqué là où le terrain réel est accidenté. Chaque octave s'efface quand elle devient plus fine qu'un pixel.
@@ -227,17 +277,34 @@ void main() {
       if (w > 0.0) { vec4 n = noised(vPos / wl + float(i) * 17.3); g += n.yzw * w * amp; tone += n.x * w * amp; }
       wl *= 0.5; amp *= 0.85;
     }
-    float k = 0.026 * rough * near;
+    float k = 0.026 * rough * near * (1.0 - water);
     se += dot(g, east) * k; sn += dot(g, north) * k;
     albedo *= 1.0 + 0.045 * tone * near;
   }
 
   vec3 n = normalize(up - uEx * (se * east + sn * north));
-  float geo = dot(up, uSun);
-  float diff = max(dot(n, uSun), 0.0) * smoothstep(-0.03, 0.07, geo);
+  float geo = dot(up, uSun), shade = smoothstep(-0.03, 0.07, geo);
+  float diff = max(dot(n, uSun), 0.0) * shade;
   vec3 sunCol = mix(vec3(1.0, 0.62, 0.40) * 0.75, vec3(1.0, 0.97, 0.93), smoothstep(0.0, 0.4, geo)) * 1.9;
-  vec3 ambient = vec3(0.80, 0.58, 0.42) * 0.16 * smoothstep(-0.12, 0.25, geo) * (0.6 + 0.4 * dot(n, up)) + vec3(0.004, 0.005, 0.008);
+  vec3 skyCol = mix(vec3(0.80, 0.58, 0.42), vec3(0.45, 0.62, 0.95), uTerra);
+  vec3 ambient = skyCol * 0.16 * smoothstep(-0.12, 0.25, geo) * (0.6 + 0.4 * dot(n, up)) + vec3(0.004, 0.005, 0.008);
   vec3 col = albedo * (diff * sunCol + ambient);
+  vec3 v = toCam / dist;
+  if (water > 0.0) {                         // reflet du ciel et éclat du Soleil sur l'eau libre
+    float open = water * (1.0 - ice), fres = 0.02 + 0.98 * pow(1.0 - max(dot(up, v), 0.0), 5.0);
+    vec3 wn = normalize(up + 0.012 * noised(vPos / 0.9 + uTime * 0.05).yzw + 0.02 * noised(vPos / 6.0).yzw);
+    col += open * (skyCol * 0.5 * fres * smoothstep(-0.1, 0.2, geo) + sunCol * pow(max(dot(reflect(-v, wn), uSun), 0.0), 220.0) * 2.5 * shade);
+  }
+  if (uWet > 0.25) {                         // nuages, vus d'en haut seulement
+    float far = smoothstep(120.0, 700.0, dist);
+    if (far > 0.0) {
+      vec3 q = vPos / 420.0 + vec3(uTime * 0.004, 0.0, uTime * 0.002);
+      float c = noised(q).x * 0.55 + noised(q * 2.3 + 4.0).x * 0.28 + noised(q * 5.1 + 9.0).x * 0.17;
+      float thr = mix(0.82, 0.57, uWet);
+      float cover = smoothstep(thr, thr + 0.16, c * 0.5 + 0.5 + 0.03 * water) * (1.0 - smoothstep(9.0, 13.0, vH));
+      col = mix(col, vec3(0.95) * (max(geo, 0.0) * shade * sunCol * 0.85 + skyCol * 0.2 * smoothstep(-0.12, 0.25, geo)), cover * 0.82 * far);
+    }
+  }
 
   vec4 a = atmosphere(uCam, -toCam / dist, dist, ${coarse ? 6 : 8});
   gl_FragColor = vec4(display(col * a.a + a.rgb), 1.0);
@@ -293,6 +360,26 @@ function release(e) {
   e.dead = true;
   if (texCache.get(e.key) === e) texCache.delete(e.key);
   if (e.tex) e.tex.dispose();
+}
+
+/* ───────────── Fleuves et lacs : deux cartes par hémisphère, chargées au premier usage ───────────── */
+
+const blank = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); blank.needsUpdate = true;
+const hemi = [0, 1].map(() => ({ tRiver: { value: blank }, tLake: { value: blank } }));
+let waterAsked = false;
+function loadWater() {
+  if (waterAsked) return;
+  waterAsked = true;
+  hemi.forEach((h, i) => [['tRiver', 'rivers'], ['tLake', 'lakes']].forEach(([u, name]) => {
+    loadBitmap(`${DATA}w/${name}_${'WE'[i]}.webp`).then(bmp => {
+      const t = new THREE.Texture(bmp);
+      t.flipY = false; t.format = THREE.RedFormat; t.colorSpace = THREE.NoColorSpace;
+      t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter; t.anisotropy = maxAniso;
+      t.onUpdate = () => { bmp.close(); };
+      t.needsUpdate = true;
+      h[u].value = t;
+    }).catch(() => { waterAsked = false; });
+  }));
 }
 
 /* ───────────── Arbre de tuiles ───────────── */
@@ -370,6 +457,7 @@ class Node {
       vertexShader: terrainVert, fragmentShader: terrainFrag,
       uniforms: {
         ...shared, tColor: { value: this.res[0].tex }, tNorm: { value: this.res[1].tex },
+        ...hemi[this.x >> this.l], uWx: { value: xf(0) },
         uCx: { value: xf(CMAX) }, uNx: { value: xf(NMAX) }, uSmooth: { value: this.l > NMAX ? 1 : 0 }, uSkirt: { value: skirtLen },
       },
     });
@@ -553,6 +641,12 @@ function flyTo(lat, lon, dist, keepHeading = false, heading = 0) {
   view.rate = 2.6; view.vel.set(0, 0);
 }
 
+/** Surface sur laquelle on vole : le sol, ou la mer là où elle le recouvre (jamais dans le polder de la ville). */
+function surfaceAt(lat, lon) {
+  const h = heightAt(lat, lon), sea = shared.uSea.value;
+  if (h >= sea) return h;
+  return Math.acos(Math.min(1, dirOf(lat, lon, siteTmp).dot(siteDir))) * R < 59 ? h : sea;
+}
 /** Distance du premier point de terrain le long d'un rayon, ou null s'il part dans le ciel. */
 function castTerrain(ro, rd, maxT = 2e4) {
   const ex = shared.uEx.value, rTop = R + 22 * ex + 1;
@@ -563,12 +657,12 @@ function castTerrain(ro, rd, maxT = 2e4) {
   let prev = t;
   for (let i = 0; i < 400 && t <= tEnd; i++) {
     tmpV.copy(ro).addScaledVector(rd, t);
-    const gap = tmpV.length() - (R + ex * heightAt(latOf(tmpV), lonOf(tmpV)));
+    const gap = tmpV.length() - (R + ex * surfaceAt(latOf(tmpV), lonOf(tmpV)));
     if (gap <= 0) {
       let lo = prev, hi = t;
       for (let k = 0; k < 10; k++) {
         const mid = (lo + hi) / 2; tmpV.copy(ro).addScaledVector(rd, mid);
-        if (tmpV.length() - (R + ex * heightAt(latOf(tmpV), lonOf(tmpV))) > 0) lo = mid; else hi = mid;
+        if (tmpV.length() - (R + ex * surfaceAt(latOf(tmpV), lonOf(tmpV))) > 0) lo = mid; else hi = mid;
       }
       return hi;
     }
@@ -597,9 +691,12 @@ function anchor(dir) {
   aP.copy(camera.position);
   if (!dir) dir = camera.getWorldDirection(aD);
   const upHint = aX.set(0, 1, 0).applyQuaternion(camera.quaternion).clone();
-  const t = castTerrain(aP, dir);
+  let t = castTerrain(aP, dir), solid = t !== null;
+  // La station compte aussi : si on la regarde, on tourne autour d'elle.
+  const c = city.stationCenter, along = aO.copy(c).sub(aP).dot(dir);
+  if (along > 0 && (t === null || along < t) && aO.copy(aP).addScaledVector(dir, along).distanceTo(c) < STATION_R) { t = along; solid = true; }
   const rho = t ?? clamp(view.dist, 5, 400);
-  setRig(aX.copy(aP).addScaledVector(dir, Math.max(rho, 0.05)), aP, upHint, t !== null);
+  setRig(aX.copy(aP).addScaledVector(dir, Math.max(rho, 0.05)), aP, upHint, solid);
 }
 /** Tourne la caméra sur place : dx vers la droite, dy vers le bas, en radians. */
 const lD = new THREE.Vector3(), lZ = new THREE.Vector3(), lR = new THREE.Vector3();
@@ -660,7 +757,7 @@ function updateCamera(dt) {
   view.tiltNow = t;
   camera.position.copy(vT).addScaledVector(vUp, view.dist * ct).addScaledVector(vFwd, -view.dist * st);
   camLat = latOf(camera.position); camLon = lonOf(camera.position);
-  const ground = R + ex * heightAt(camLat, camLon), lift = ground + CLEAR - camera.position.length();
+  const ground = R + ex * surfaceAt(camLat, camLon), lift = ground + CLEAR - camera.position.length();
   if (lift > 0) {                    // un relief sur la route : on monte juste ce qu'il faut, et on reste à cette altitude
     camera.position.setLength(ground + CLEAR);
     view.rP += lift; view.rPGoal += lift; vT.addScaledVector(vUp, lift);
@@ -668,7 +765,7 @@ function updateCamera(dt) {
   camDist = camera.position.length(); camAgl = camDist - ground;
   camera.up.copy(vFwd).multiplyScalar(ct).addScaledVector(vUp, st);
   camera.lookAt(vT);
-  camera.near = clamp(camAgl * 0.12, 0.02, 3000);
+  camera.near = clamp(Math.min(camAgl * 0.12, Math.max(camera.position.distanceTo(city.stationCenter) - STATION_R - 10, 1) * 0.5), 0.02, 3000);
   camera.far = camDist + R * 1.2;
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
@@ -793,6 +890,10 @@ addEventListener('blur', () => keys.clear());
 
 const city = createCity(THREE, { shared, ATMO, R, dirOf });
 scene.add(city.group);
+// L'ascenseur et sa station montent bien au-delà du plan lointain de la caméra : ils ont leur propre scène, dessinée en deux passes.
+const spaceScene = new THREE.Scene();
+spaceScene.add(city.space);
+const STATION_R = 70;
 
 /* ───────────── Noms de lieux ───────────── */
 
@@ -815,15 +916,19 @@ const PLACES = [
   ['Phoenix', 68.22, -125.75, 5000, 1], ['Pathfinder', 19.13, -33.22, 4000, 1],
 ];
 const labelBox = $('labels');
-const labels = [...PLACES, ...city.places].map(([name, lat, lon, far, site]) => {
+const labels = [...PLACES, ...city.places].map(([name, lat, lon, far, site, alt = 0]) => {
   const el = document.createElement('button');
   el.className = 'lb' + (site === 2 ? ' city' : site ? ' site' : ''); el.textContent = name;
-  const go = () => flyTo(lat, lon, Math.min(view.distGoal, site === 2 ? (far > 1e5 ? 70 : 14) : site ? 250 : 900));
+  const go = alt ? () => {             // la station : on s'y rend à sa hauteur, vue de côté
+    const c = city.stationCenter;
+    flyTo(latOf(c), lonOf(c), 300);
+    view.rPGoal = c.length(); view.tiltGoal = 75 * DEG - autoTilt(300);
+  } : () => flyTo(lat, lon, Math.min(view.distGoal, site === 2 ? (far > 1e5 ? 70 : 14) : site ? 250 : 900));
   el.addEventListener('click', go);
   labelBox.appendChild(el);
   const w = el.offsetWidth;
   el.style.display = 'none';
-  return { el, lat, lon, far, go, dir: dirOf(lat, lon), on: false, x: 0, y: 0, w, top: site === 2 };
+  return { el, lat, lon, far, go, alt, dir: dirOf(lat, lon), on: false, x: 0, y: 0, w, top: site === 2 };
 });
 let namesOn = true;
 // Ordre de priorité : la ville d'abord, puis l'ordre de la liste. Un nom qui en chevaucherait un autre s'efface.
@@ -839,8 +944,14 @@ function updateLabels(w, h) {
   for (const l of byRank) {
     let on = namesOn && view.dist < l.far;
     if (on) {
-      tmpV.copy(l.dir).multiplyScalar(R + ex * sampleLow(l.lat, l.lon));
-      on = tmpV.dot(tmpV2.copy(camera.position).sub(tmpV)) > 0;       // devant l'horizon
+      if (l.alt) {                       // en orbite : caché seulement si la planète est entre nous
+        tmpV.copy(city.stationCenter); tmpV2.copy(tmpV).sub(camera.position);
+        const t = clamp(-camera.position.dot(tmpV2) / tmpV2.lengthSq(), 0, 1);
+        on = tmpV2.multiplyScalar(t).add(camera.position).length() > R;
+      } else {
+        tmpV.copy(l.dir).multiplyScalar(R + ex * sampleLow(l.lat, l.lon));
+        on = tmpV.dot(tmpV2.copy(camera.position).sub(tmpV)) > 0;       // devant l'horizon
+      }
       if (on) {
         tmpV.project(camera);
         on = tmpV.z < 1 && Math.abs(tmpV.x) < 1.05 && Math.abs(tmpV.y) < 1.05;
@@ -873,6 +984,22 @@ function syncPanel() {
 }
 sEx.addEventListener('input', () => { shared.uEx.value = +sEx.value; syncPanel(); });
 sLs.addEventListener('input', () => { sun.ls = +sLs.value; syncPanel(); });
+// Terraformation. Niveaux de la mer : les deux rivages anciens proposés pour l'océan boréal de Mars
+// (Deuteronilus, vers -3,76 km, puis Arabia, vers -2,09 km ; Carr et Head, 2003).
+const STAGES = [
+  [0.001, 'Mars aujourd’hui'], [0.2, 'Réchauffement : l’air s’épaissit'], [0.4, 'Dégel : mers d’Hellas et du nord'],
+  [0.6, 'Océan boréal, lichens et toundra'], [0.85, 'Fleuves, prairies, premières forêts'], [2, 'Mars bleue'],
+];
+function setTerra(t) {
+  shared.uTerra.value = t;
+  shared.uWet.value = smooth(0.2, 1, t);
+  shared.uSea.value = t < 0.2 ? -20 : t < 0.6 ? -8.3 + (-3.76 + 8.3) * smooth(0.2, 0.6, t) : -3.76 + (-2.09 + 3.76) * (t - 0.6) / 0.4;
+  if (t > 0) loadWater();
+  $('vTerra').textContent = STAGES.find(s => t < s[0])[1];
+}
+const sTerra = $('sTerra');
+sTerra.addEventListener('input', () => setTerra(+sTerra.value / 100));
+setTerra(0);
 let sunDrag = false;
 sSun.addEventListener('input', () => { sun.lon = wrap180(view.lon - (+sSun.value - 12) * 15); });
 sSun.addEventListener('pointerdown', () => { sunDrag = true; });
@@ -923,12 +1050,20 @@ function tick(now) {
   const dt = Math.min((now - lastT) / 1000, 0.1) || 0.016; lastT = now; frame++;
   resize();
   updateCamera(dt);
+  shared.uTime.value = now / 1000;
   selectTiles();
   city.update(now / 1000, camera, shared.uEx.value, focalPx, renderer.getPixelRatio());
   renderer.clear();
   renderer.render(sky, camera);
+  // Passe lointaine : ce qui dépasse le plan lointain (le câble, la station). La planète, dessinée ensuite, les recouvre s'ils sont derrière elle.
+  const near = camera.near, far = camera.far;
+  camera.near = far * 0.98; camera.far = 1e6; camera.updateProjectionMatrix();
+  renderer.clearDepth();
+  renderer.render(spaceScene, camera);
+  camera.near = near; camera.far = far; camera.updateProjectionMatrix();
   renderer.clearDepth();
   renderer.render(scene, camera);
+  renderer.render(spaceScene, camera);
   updateLabels(cssW, cssH);
   updateHud(now);
   stats.tiles = shown.length; stats.fps += (1 / dt - stats.fps) * 0.05;
@@ -966,4 +1101,4 @@ function probe() {                   // couleur au centre de l'image, juste apr�
   gl.readPixels(gl.drawingBufferWidth >> 1, gl.drawingBufferHeight >> 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
   return [...px];
 }
-window.mars = { probe, SITE, anchor, lookAround, keys, get alt() { return camDist - R; }, levels: () => shown.reduce((a, n) => (a[n.l] = (a[n.l] || 0) + 1, a), {}), view, sun, stats, heightAt, sampleLow, flyTo, shared, camera, get agl() { return camAgl; }, get ready() { return running; } };
+window.mars = { probe, city, setTerra, SITE, anchor, lookAround, keys, get alt() { return camDist - R; }, levels: () => shown.reduce((a, n) => (a[n.l] = (a[n.l] || 0) + 1, a), {}), view, sun, stats, heightAt, sampleLow, flyTo, shared, camera, get agl() { return camAgl; }, get ready() { return running; } };

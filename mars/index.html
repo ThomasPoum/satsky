@@ -70,6 +70,7 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 
 <div id="side">
   <div id="panel">
+    <label><span>Terraformation</span><input id="sTerra" type="range" min="0" max="100" step="1" value="0"><b id="vTerra"></b></label>
     <label><span>Relief <b id="vEx"></b></span><input id="sEx" type="range" min="1" max="10" step="0.5" value="3"></label>
     <label><span>Heure solaire au centre <b id="vSun"></b></span><input id="sSun" type="range" min="0" max="24" step="0.05"></label>
     <label><span>Saison <b id="vLs"></b></span><input id="sLs" type="range" min="0" max="359" step="1" value="70"></label>
@@ -85,16 +86,17 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
       <button class="b" id="bCity">Nouvelle-Arès</button>
       <button class="b" id="bLook" aria-pressed="false" title="Glisser tourne la caméra sur place au lieu de déplacer">Regarder</button>
     </div>
+    <p>Terraformation : l’air s’épaissit et bleuit, la glace fond, l’eau remplit les creux du relief réel (rivages de Deuteronilus puis d’Arabia), fleuves et lacs suivent les pentes mesurées, la végétation gagne selon latitude, altitude et humidité. La ville reste au sec derrière sa digue.</p>
     <p>Glisser : se déplacer, à altitude constante. Molette ou pincement : avancer vers le point visé. Clic droit ou deux doigts : tourner autour. Maj + glisser, ou « Regarder » : tourner la caméra sur place. Clavier : ZQSD ou WASD pour voler, R et F pour monter et descendre, flèches pour regarder, Maj pour accélérer. Double-clic : y aller.</p>
   </div>
   <button class="b" id="bPanel" aria-expanded="true" aria-controls="panel">Réglages</button>
 </div>
 
-<div id="credit">Relief : NASA MGS / MOLA (1,85 km par point). Couleur : <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a>, CC BY 4.0.</div>
+<div id="credit">Relief : NASA MGS / MOLA (1,85 km par point). Villes, ascenseur et terraformation : fiction. Couleur : <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a>, CC BY 4.0.</div>
 
 <div id="load"><p id="loadMsg">Mars arrive…</p><div id="bar"><i></i></div></div>
 
-<script src="../menu.js?v=4" data-page="mars" data-root="../"></script>
-<script type="module" src="mars.js?v=4"></script>
+<script src="../menu.js?v=5" data-page="mars" data-root="../"></script>
+<script type="module" src="mars.js?v=5"></script>
 </body>
 </html>
