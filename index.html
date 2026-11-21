@@ -166,6 +166,7 @@ input[type=range]{width:100%;height:32px;accent-color:var(--amber)}
   <label class="check"><input type="checkbox" id="cCam" checked> Afficher la caméra</label>
   <p id="pos">Position : —</p>
   <button id="bLoc">Mettre à jour ma position</button>
+  <p>Version 1.3</p>
   <p>Orbites et catalogue : CelesTrak. Contexte : SatSky et Wikipédia. Calcul SGP4 dans le téléphone.</p>
   </div>
 </section>
@@ -404,26 +405,44 @@ function rot(a, b, g) {
 }
 /* Orientation lissée par quaternions + filtre « 1 € » (lissage fort à l'arrêt, réactif en mouvement).
    iOS : le gyroscope (alpha relatif, fluide) donne le mouvement, la boussole ne corrige le nord que lentement. */
-const ORI = { target: null, smooth: null, speed: 0, lastT: 0, iosOff: null, at: 0 };
-function onOri(e, absolute) {
-  if (e.alpha == null || e.beta == null) return;
-  let alpha = e.alpha;
-  if (e.webkitCompassHeading != null && e.webkitCompassHeading >= 0) {
-    const off = wrap180((360 - e.webkitCompassHeading) - e.alpha), acc = e.webkitCompassAccuracy;
-    if (ORI.iosOff == null) ORI.iosOff = off;
-    else {
-      const err = wrap180(off - ORI.iosOff);
-      const k = Math.abs(err) > 25 ? 0.08 : (acc >= 0 && acc <= 20 ? 0.02 : 0.006);
-      ORI.iosOff = wrap180(ORI.iosOff + err * k);
-    }
-    alpha = e.alpha + ORI.iosOff;
-  } else if (!absolute && !e.absolute) return;
-  const q = Q.euler(alpha - S.off, e.beta, e.gamma), t = performance.now();
+/* Orientation : le gyroscope (mesure relative, fluide, sans sauts) pilote le mouvement ;
+   la boussole (absolue, bruitée) ne recale le nord que lentement, via un filtre qui ignore ses sursauts.
+   iOS : alpha relatif + webkitCompassHeading. Android : « deviceorientation » relatif + « deviceorientationabsolute ». */
+const ORI = { target: null, smooth: null, speed: 0, lastT: 0, at: 0, rel: null, abs: null, north: Core.northFilter(), relSeen: false, skip: 0 };
+function setTarget(q) {
+  const t = performance.now();
   if (ORI.target) {
-    const dt = Math.max(1, t - ORI.lastT) / 1000, v = Q.angle(ORI.target, q) / dt;
-    ORI.speed += (Math.min(v, 720) - ORI.speed) * 0.3;
+    const dt = Math.max(1, t - ORI.lastT) / 1000, ang = Q.angle(ORI.target, q);
+    // garde-fou : un saut énorme et isolé (capteur qui hoquette) est ignoré une fois
+    if (ang > 30 && dt < 0.08 && ORI.skip < 2) { ORI.skip++; return; }
+    ORI.skip = 0;
+    ORI.speed += (Math.min(ang / dt, 720) - ORI.speed) * 0.3;
   }
   ORI.target = q; ORI.lastT = t; ORI.at = t;
+}
+function fuse() {
+  if (!ORI.rel) return;
+  const off = ORI.north.off ?? 0;
+  setTarget(Q.mul(Q.yaw(off - S.off), ORI.rel));
+}
+function northFrom(qAbs, good) {
+  if (!ORI.rel) return;
+  ORI.north.update(Q.yawOffset(qAbs, ORI.rel), Core.aimOf(Q.mat(ORI.rel)).el, performance.now(), good);
+}
+function onRel(e) {
+  if (e.alpha == null || e.beta == null) return;
+  ORI.relSeen = true;
+  ORI.rel = Q.euler(e.alpha, e.beta, e.gamma);
+  if (e.webkitCompassHeading != null && e.webkitCompassHeading >= 0) {   // iOS : les deux dans le même évènement
+    const acc = e.webkitCompassAccuracy;
+    northFrom(Q.euler(360 - e.webkitCompassHeading, e.beta, e.gamma), acc >= 0 && acc <= 20);
+  } else if (ORI.abs) northFrom(ORI.abs, true);
+  fuse();
+}
+function onAbs(e) {
+  if (e.alpha == null || e.beta == null) return;
+  ORI.abs = Q.euler(e.alpha, e.beta, e.gamma);
+  if (!ORI.relSeen) { ORI.rel = ORI.abs; ORI.north.off = 0; fuse(); }   // pas de gyroscope relatif : mode absolu lissé
 }
 /* appelé à chaque image : rapproche l'orientation affichée de la mesure */
 function stepOrientation(dt) {
@@ -432,10 +451,12 @@ function stepOrientation(dt) {
   ORI.smooth = Q.slerp(ORI.smooth, ORI.target, RM ? 1 : Core.oneEuroAlpha(dt, ORI.speed));
   S.R = Q.mat(ORI.smooth);
 }
-let gotAbs = false;
 function startSensors() {
-  addEventListener('deviceorientationabsolute', e => { gotAbs = true; onOri(e, true); });
-  addEventListener('deviceorientation', e => { if (!gotAbs) onOri(e, false); });
+  addEventListener('deviceorientationabsolute', onAbs);
+  addEventListener('deviceorientation', e => {
+    if (e.absolute && e.webkitCompassHeading == null) onAbs(e);   // navigateurs où cet évènement est déjà absolu
+    else onRel(e);
+  });
 }
 async function askOrientation() {
   try {
@@ -500,8 +521,9 @@ function lock(s) {
 function unlock(silent) {
   if (S.sel && !silent) S.ignoreId = S.sel.id;
   if (S.sel) S.fade = { s: S.sel, t0: performance.now() }; /* trajectoire et crochets s'effacent en fondu */
-  S.sel = null; S.aimId = null;
+  S.sel = null; S.aimId = null; S.aim = null;
   $('#bClear').textContent = 'Verrouiller'; $('#bClear').classList.remove('locked');
+  $('#card').classList.remove('show', 'locked', 'flash');
   if ($('#fiche').classList.contains('open')) closeSheets();
   lastCard = '';
 }
@@ -959,7 +981,7 @@ $('#group').onchange = e => { if (e.target.value === 'active') toast('≈ 10 000
 const rOff = $('#rOff'), rFov = $('#rFov');
 rOff.value = S.off; $('#oOff').textContent = S.off + '°';
 rFov.value = S.fov; $('#oFov').textContent = S.fov + '°';
-rOff.oninput = () => { S.off = +rOff.value; $('#oOff').textContent = S.off + '°'; ls.set('off', S.off); };
+rOff.oninput = () => { S.off = +rOff.value; $('#oOff').textContent = S.off + '°'; ls.set('off', S.off); fuse(); };
 rFov.oninput = () => { S.fov = +rFov.value; $('#oFov').textContent = S.fov + '°'; ls.set('fov', S.fov); };
 $('#cAuto').checked = S.auto; $('#cAuto').onchange = e => { S.auto = e.target.checked; ls.set('auto', S.auto); lastCard = ''; };
 $('#cVis').checked = S.onlyVis; $('#cVis').onchange = e => { S.onlyVis = e.target.checked; ls.set('onlyVis', S.onlyVis); };
@@ -991,7 +1013,12 @@ function loop(t) {
 }
 requestAnimationFrame(loop);
 loadGroup(S.group);
-if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+if ('serviceWorker' in navigator) {
+  // une nouvelle version prend la main : on recharge une fois pour l'utiliser tout de suite
+  const had = !!navigator.serviceWorker.controller; let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (had && !reloaded) { reloaded = true; location.reload(); } });
+  addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {}));
+}
 }
 </script>
 </body>

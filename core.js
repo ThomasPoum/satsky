@@ -30,6 +30,10 @@
       return a.map((x, i) => x * wa + b[i] * wb);
     },
     angle(a, b) { return 2 * Math.acos(Math.min(1, Math.abs(Q.dot(a, b)))) / D; },
+    conj(q) { return [-q[0], -q[1], -q[2], q[3]]; },
+    yaw(deg) { const h = deg * D / 2; return [0, 0, Math.sin(h), Math.cos(h)]; },
+    /* rotation autour de la verticale qui amène q_rel sur q_abs (q_abs ≈ yaw(off) · q_rel), en degrés */
+    yawOffset(qAbs, qRel) { const d = Q.mul(qAbs, Q.conj(qRel)); return wrap180(2 * Math.atan2(d[2], d[3]) / D); },
     /* matrice 3×3 (ligne par ligne) : repère téléphone → repère local (x est, y nord, z zénith) */
     mat(q) { const [x, y, z, w] = q; return [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w), 2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w), 2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]; }
   };
@@ -39,6 +43,26 @@
     return Math.min(1, 1 / (1 + tau / Math.max(dt, 0.001)));
   }
 
+  /* Recalage lent du nord : le gyroscope donne le mouvement, la boussole ne corrige que la dérive.
+     Les sursauts du magnétomètre (> 20°) sont ignorés s'ils ne durent pas 1,5 s, et la boussole est
+     ignorée quand on vise près du zénith, où elle n'est pas fiable. */
+  function northFilter() {
+    const f = { off: null, outSince: 0 };
+    f.update = (cand, camEl, t, good = true) => {
+      if (f.off == null) { f.off = cand; return f.off; }
+      if (Math.abs(camEl) > 70) return f.off;
+      const err = wrap180(cand - f.off);
+      let k;
+      if (Math.abs(err) > 20) {
+        if (!f.outSince) f.outSince = t;
+        if (t - f.outSince < 1500) return f.off;
+        k = 0.03;
+      } else { f.outSince = 0; k = good ? 0.01 : 0.004; }
+      f.off = wrap180(f.off + err * k);
+      return f.off;
+    };
+    return f;
+  }
   function enu(az, el) { const c = Math.cos(el * D); return [c * Math.sin(az * D), c * Math.cos(az * D), Math.sin(el * D)]; }
   /* Projection perspective d'une direction du ciel sur l'écran (caméra arrière, axe -z du téléphone). */
   function project(R, az, el, f, th, W, H) {
@@ -74,6 +98,6 @@
   }
   function kbMatch(kb, name) { return kb.find(k => k.re.test(name)) || null; }
 
-  const Core = { D, RE, MU, wrap180, sunEci, sunlit, Q, oneEuroAlpha, enu, project, aimOf, parseTLE, orbitParams, kbMatch };
+  const Core = { D, RE, MU, wrap180, sunEci, sunlit, Q, oneEuroAlpha, northFilter, enu, project, aimOf, parseTLE, orbitParams, kbMatch };
   if (typeof module !== 'undefined' && module.exports) module.exports = Core; else root.Core = Core;
 })(typeof self !== 'undefined' ? self : globalThis);

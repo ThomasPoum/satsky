@@ -114,3 +114,27 @@ test('Contexte : chaque famille trouve la bonne fiche', () => {
   assert.equal(m('SATELLITE INCONNU'), undefined);
   for (const k of KB) for (const f of ['nom', 'type', 'resume', 'wiki']) assert.ok(k[f], `${k.nom} : champ ${f}`);
 });
+
+test('Décalage de cap : retrouve la rotation verticale entre gyroscope et boussole', () => {
+  for (const [off, b, g] of [[37, 120, 10], [-150, 95, -30], [179, 60, 5]]) {
+    const rel = C.Q.euler(80, b, g), abs = C.Q.euler(80 + off, b, g);
+    near(C.Q.yawOffset(abs, rel), C.wrap180(off), 1e-6);
+    const fused = C.Q.mul(C.Q.yaw(off), rel);
+    near(C.Q.angle(fused, abs), 0, 1e-6, 'gyroscope recalé = boussole');
+  }
+});
+
+test('Filtre du nord : ignore un sursaut bref, suit un vrai décalage, ignore la boussole au zénith', () => {
+  const f = C.northFilter(); let t = 0;
+  f.update(10, 20, t);
+  near(f.off, 10, 1e-9, 'première mesure acceptée');
+  for (let i = 0; i < 30; i++) f.update(190, 20, t += 16);          // sursaut de 180° pendant 0,5 s
+  near(f.off, 10, 1e-9, 'sursaut bref ignoré');
+  for (let i = 0; i < 60; i++) f.update(12, 20, t += 16);           // bruit normal : suit doucement
+  assert.ok(f.off > 10 && f.off < 12);
+  const before = f.off;
+  for (let i = 0; i < 120; i++) f.update(60, 80, t += 16);          // visée au zénith : boussole ignorée
+  near(f.off, before, 1e-9, 'pas de correction près du zénith');
+  for (let i = 0; i < 700; i++) f.update(60, 20, t += 16);          // décalage réel et durable (~11 s)
+  near(f.off, 60, 1, 'finit par suivre un décalage durable');
+});

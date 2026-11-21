@@ -149,3 +149,28 @@ test('une grosse constellation (9 000 satellites) se charge sans geler l\'écran
   expect(await page.evaluate(() => window.__satsky.sats.length)).toBe(9000);
   expect(gap, `plus longue image : ${Math.round(gap)} ms`).toBeLessThan(250);
 });
+
+test('un sursaut de la boussole ne fait pas sauter le ciel', async ({ page }) => {
+  await setup(page);
+  await page.click('#go');
+  // Android : gyroscope relatif (alpha arbitraire = 50°) + boussole absolue (cap réel : alpha 80° → visée 280°)
+  await page.evaluate(() => {
+    window.__glitch = false;
+    setInterval(() => {
+      dispatchEvent(Object.assign(new Event('deviceorientation'), { alpha: 50, beta: 120, gamma: 0, absolute: false }));
+      dispatchEvent(Object.assign(new Event('deviceorientationabsolute'), { alpha: window.__glitch ? 260 : 80, beta: 120, gamma: 0, absolute: true }));
+    }, 16);
+  });
+  const aim = () => page.evaluate(() => window.__satsky.R && Core.aimOf(window.__satsky.R).az);
+  await expect.poll(aim, { timeout: 4000 }).toBeCloseTo(280, 0);
+  // sursaut de 180° pendant 0,5 s ; on mesure l'écart maximal de la visée pendant et après
+  await page.evaluate(() => {
+    window.__maxDev = 0;
+    const f = () => { const R = window.__satsky.R; if (R) { const d = Math.abs(((Core.aimOf(R).az - 280 + 540) % 360) - 180); window.__maxDev = Math.max(window.__maxDev, d); } requestAnimationFrame(f); };
+    requestAnimationFrame(f);
+    window.__glitch = true; setTimeout(() => { window.__glitch = false; }, 500);
+  });
+  await page.waitForTimeout(1500);
+  const dev = await page.evaluate(() => window.__maxDev);
+  expect(dev, `écart maximal de la visée : ${dev.toFixed(2)}°`).toBeLessThan(1);
+});

@@ -31,7 +31,7 @@ Les capteurs d'un téléphone sont bruités, et la boussole est la plus mauvaise
 
 1. **Quaternions** pour représenter l'orientation, plutôt que trois angles : pas de saut au passage 359°/0°, et pas d'instabilité quand le téléphone est vertical.
 2. **Filtre « 1 € »** ([Casiez et al., CHI 2012](https://cristal.univ-lille.fr/~casiez/1euro/)) : lissage fort quand le téléphone est presque immobile, pour tuer le tremblement, et réactif dès qu'on bouge.
-3. **Fusion gyroscope et boussole sur iOS** : le gyroscope, fluide, donne le mouvement. La boussole (`webkitCompassHeading`), juste mais bruitée, ne corrige le nord que lentement, et moins encore quand sa précision annoncée est mauvaise.
+3. **Fusion gyroscope et boussole, sur iOS comme sur Android** : le gyroscope, fluide et sans sauts, pilote le mouvement. La boussole (`webkitCompassHeading` sur iOS, `deviceorientationabsolute` sur Android), juste mais bruitée, ne fait que recaler le nord, lentement. Ses sursauts de plus de 20° sont ignorés s'ils durent moins de 1,5 s, et elle n'est pas écoutée quand on vise près du zénith, où le cap bascule.
 4. **Rendu à 60 images/s découplé des capteurs**, avec une position des satellites extrapolée entre deux calculs SGP4.
 5. **Visée « aimantée »** : la cible acquise reste prioritaire tant qu'elle est proche du centre, et une perte brève (moins de 0,4 s) met le verrouillage en pause au lieu de le remettre à zéro.
 
