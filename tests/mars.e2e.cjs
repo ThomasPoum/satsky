@@ -30,7 +30,7 @@ test('Mars : globe affiché, altitudes MOLA exactes, descente au zoom', async ({
   expect(errors).toEqual([]);
 });
 
-test('Mars : se déplacer garde l’altitude, la ville est là', async ({ page }) => {
+test('Mars : se déplacer garde l’altitude, terraformation, clic sur un nom', async ({ page }) => {
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));
   await page.goto('/mars/index.html');
@@ -50,11 +50,7 @@ test('Mars : se déplacer garde l’altitude, la ville est là', async ({ page }
   await page.waitForTimeout(300);
   const after = await page.evaluate(() => window.mars.camera.position.toArray());
   for (let i = 0; i < 3; i++) expect(Math.abs(after[i] - before[i])).toBeLessThan(0.01);
-  // Le site de la ville est un plateau, et ses noms existent.
-  const flat = await page.evaluate(() => { const S = window.mars.SITE; return [0, 0.2, -0.3].map(d => window.mars.heightAt(S.lat + d, S.lon - d)); });
-  for (const h of flat) expect(h).toBeCloseTo(-4.75, 5);
-  await expect(page.locator('.lb.city')).toHaveCount(6);
-  // Terraformation : les plaines du nord, sous le rivage d'Arabia, deviennent un océan ; la ville reste au sec.
+  // Terraformation : les plaines du nord, sous le rivage d'Arabia, deviennent un océan.
   await page.evaluate(() => { const m = window.mars; m.flyTo(62, -30, 6000); m.view.tiltGoal = 0; m.sun.lon = -30; m.sun.ls = 90; m.view.rate = 60; });
   await page.waitForFunction(() => Math.abs(window.mars.view.dist - 6000) < 5, null, { timeout: 30_000 });
   const dry = await page.evaluate(() => window.mars.probe());
@@ -64,16 +60,16 @@ test('Mars : se déplacer garde l’altitude, la ville est là', async ({ page }
   expect(wet[2]).toBeGreaterThan(wet[0] + 20);
   expect(await page.evaluate(() => window.mars.shared.uSea.value)).toBeCloseTo(-2.09, 5);
   await page.evaluate(() => window.mars.setTerra(0));
-  // Depuis la vue globale, un clic sur le nom de la ville y emmène (et pas chez un voisin).
+  // Depuis la vue globale, un clic sur un nom y emmène (et pas chez un voisin).
   await page.evaluate(() => { const m = window.mars; m.flyTo(2, -92, 11500); m.view.rate = 60; });
-  const name = page.locator('.lb.city', { hasText: 'Nouvelle-Arès' });
+  const name = page.locator('.lb', { hasText: 'Olympus Mons' });
   await expect(name).toBeVisible({ timeout: 30_000 });
   await page.waitForFunction(() => Math.abs(window.mars.view.dist - 11500) < 5, null, { timeout: 30_000 });
   const box = await name.boundingBox();
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await expect.poll(() => page.evaluate(() => window.mars.view.distGoal), { timeout: 30_000 }).toBe(70);
+  await page.mouse.click(box.x + 20, box.y + box.height / 2);
+  await expect.poll(() => page.evaluate(() => window.mars.view.distGoal), { timeout: 30_000 }).toBe(900);
   const goal = await page.evaluate(() => { const m = window.mars, v = new m.camera.position.constructor(0, 1, 0).applyQuaternion(m.view.qGoal); return [Math.asin(v.y) * 57.2958, Math.atan2(-v.z, v.x) * 57.2958]; });
-  expect(goal[0]).toBeCloseTo(-11.2, 1); expect(goal[1]).toBeCloseTo(-70, 1);
+  expect(goal[0]).toBeCloseTo(18.65, 1); expect(goal[1]).toBeCloseTo(-133.8, 1);
   expect(errors).toEqual([]);
 });
 

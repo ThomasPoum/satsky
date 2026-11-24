@@ -24,7 +24,6 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1
   text-shadow:0 0 4px #000,0 0 2px #000,0 1px 8px #000;background:none;border:0;font-family:inherit;will-change:transform}
 .lb::before{content:"";position:absolute;left:-3px;top:50%;width:5px;height:5px;margin-top:-3px;border-radius:50%;border:1px solid var(--ice)}
 .lb.site{color:var(--amber)}.lb.site::before{border-color:var(--amber)}
-.lb.city{color:#fff;font-weight:600;letter-spacing:.06em}.lb.city::before{border-color:#fff;background:#fff}
 #top{position:fixed;left:68px;top:calc(var(--st) + 8px);height:44px;display:flex;align-items:center;pointer-events:none}
 #top h1{margin:0;font-size:17px;font-weight:600;letter-spacing:.14em;text-transform:uppercase}
 #hud{position:fixed;left:14px;bottom:calc(var(--sb) + 30px);display:grid;grid-template-columns:auto auto;gap:1px 12px;font-size:13px;pointer-events:none;text-shadow:0 0 4px #000,0 0 2px #000}
@@ -83,20 +82,19 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
       <button class="b" id="bNorth">Nord en haut</button>
     </div>
     <div class="row">
-      <button class="b" id="bCity">Nouvelle-Arès</button>
       <button class="b" id="bLook" aria-pressed="false" title="Glisser tourne la caméra sur place au lieu de déplacer">Regarder</button>
     </div>
-    <p>Terraformation : l’air s’épaissit et bleuit, la glace fond, l’eau remplit les creux du relief réel (rivages de Deuteronilus puis d’Arabia), fleuves et lacs suivent les pentes mesurées, la végétation gagne selon latitude, altitude et humidité. La ville reste au sec derrière sa digue.</p>
+    <p>Terraformation : l’air s’épaissit et bleuit, la glace fond, l’eau remplit les creux du relief réel (rivages de Deuteronilus puis d’Arabia), fleuves et lacs suivent les pentes mesurées, la végétation gagne selon latitude, altitude et humidité.</p>
     <p>Glisser : se déplacer, à altitude constante. Molette ou pincement : avancer vers le point visé. Clic droit ou deux doigts : tourner autour. Maj + glisser, ou « Regarder » : tourner la caméra sur place. Clavier : ZQSD ou WASD pour voler, R et F pour monter et descendre, flèches pour regarder, Maj pour accélérer. Double-clic : y aller.</p>
   </div>
   <button class="b" id="bPanel" aria-expanded="true" aria-controls="panel">Réglages</button>
 </div>
 
-<div id="credit">Relief : NASA MGS / MOLA (1,85 km par point). Villes, ascenseur et terraformation : fiction. Couleur : <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a>, CC BY 4.0.</div>
+<div id="credit">Relief : NASA MGS / MOLA (1,85 km par point). Terraformation : fiction. Couleur : <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a>, CC BY 4.0.</div>
 
 <div id="load"><p id="loadMsg">Mars arrive…</p><div id="bar"><i></i></div></div>
 
-<script src="../menu.js?v=5" data-page="mars" data-root="../"></script>
-<script type="module" src="mars.js?v=5"></script>
+<script src="../menu.js?v=6" data-page="mars" data-root="../"></script>
+<script type="module" src="mars.js?v=6"></script>
 </body>
 </html>

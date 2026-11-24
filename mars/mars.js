@@ -1,7 +1,6 @@
 // Mars en 3D : globe à niveaux de détail, relief MOLA réel, atmosphère poussiéreuse, Soleil.
 // Repère : celui de la planète (fixe). Y = pôle nord, longitude 0 sur +X, l'est vers -Z. Unité : le kilomètre.
 import * as THREE from './three.module.min.js';
-import { SITE, createCity } from './city.js?v=5';
 
 const R = 3389.5, DEG = Math.PI / 180;
 const SEG = 48;            // segments par côté de tuile
@@ -47,24 +46,15 @@ let hiRanges = null;           // [min, max] en mètres par case de niveau 3
 const hiTiles = new Map();     // 'x_y' -> { d: Uint8Array 722², lo, span, last } ou Promise
 let frame = 0;
 
-// Le site de la ville est aplani : un plateau à altitude fixe, raccordé en douceur au terrain réel.
-const siteDir = dirOf(SITE.lat, SITE.lon), siteTmp = new THREE.Vector3();
-function leveled(h, lat, lon) {
-  if (Math.abs(lat - SITE.lat) > 1.2 || Math.abs(wrap180(lon - SITE.lon)) > 1.2) return h;
-  const d = Math.acos(Math.min(1, dirOf(lat, lon, siteTmp).dot(siteDir))) * R;
-  h += (SITE.h - h) * (1 - smooth(SITE.flat0, SITE.flat1, d));
-  // La Grande Digue : un anneau plus haut que la mer future, qui garde la ville au sec.
-  return Math.max(h, SITE.h + (SITE.dike - SITE.h) * smooth(52, 58, d) * (1 - smooth(60, 66, d)));
-}
 function sampleLow(lat, lon) {
   const fx = clamp((wrap180(lon) + 180) * 4, 0, 1440), fy = clamp((90 - lat) * 4, 0, 720);
   const x = Math.min(fx | 0, 1439), y = Math.min(fy | 0, 719), u = fx - x, v = fy - y, i = y * 1441 + x;
-  return leveled((low[i] * (1 - u) + low[i + 1] * u) * (1 - v) + (low[i + 1441] * (1 - u) + low[i + 1442] * u) * v, lat, lon);
+  return (low[i] * (1 - u) + low[i + 1] * u) * (1 - v) + (low[i + 1441] * (1 - u) + low[i + 1442] * u) * v;
 }
 function sampleHi(t, tx, ty, lat, lon) {
   const fx = clamp((lon - (-180 + tx * 22.5)) * 32 + 0.5, 0, 720.999), fy = clamp((90 - ty * 22.5 - lat) * 32 + 0.5, 0, 720.999);
   const x = fx | 0, y = fy | 0, u = fx - x, v = fy - y, i = y * 722 + x, d = t.d;
-  return leveled(t.lo + t.span * ((d[i] * (1 - u) + d[i + 1] * u) * (1 - v) + (d[i + 722] * (1 - u) + d[i + 723] * u) * v), lat, lon);
+  return t.lo + t.span * ((d[i] * (1 - u) + d[i + 1] * u) * (1 - v) + (d[i + 722] * (1 - u) + d[i + 723] * u) * v);
 }
 function hiKey(lat, lon) {
   const tx = clamp(Math.floor((wrap180(lon) + 180) / 22.5), 0, 15), ty = clamp(Math.floor((90 - lat) / 22.5), 0, 7);
@@ -109,7 +99,6 @@ const shared = {
   uEx: { value: 3 },
   uHs: { value: 11 },
   uPix: { value: 0.001 },      // angle d'un pixel, en radians
-  uCity: { value: siteDir },
   uTerra: { value: 0 },        // avancement de la terraformation, de 0 à 1
   uSea: { value: -20 },        // niveau de la mer, en km par rapport au niveau zéro
   uWet: { value: 0 },          // humidité : lacs, fleuves, végétation
@@ -158,12 +147,11 @@ const terrainVert = /* glsl */`
 attribute vec3 aUp;
 attribute float aH, aSkirt;
 uniform float uEx, uSkirt, uSea;
-uniform vec3 uCity;
 varying vec2 vUv;
 varying vec3 vPos;
 varying float vH;
 void main() {
-  float h = length(aUp - uCity) * 3389.5 < 59.0 ? aH : max(aH, uSea);      // pas de mer dans le polder de la ville
+  float h = max(aH, uSea);             // la mer aplatit les fonds
   vH = aH;
   vec3 p = position + aUp * (h * uEx - aSkirt * uSkirt * max(uEx, 1.0));
   vUv = uv;
@@ -178,7 +166,6 @@ ${ATMO}
 uniform sampler2D tColor, tNorm;
 uniform vec4 uCx, uNx;        // échelle (xy) et décalage (zw) vers la tuile de couleur / de pentes
 uniform float uSmooth, uPix, uSea, uWet, uTime;
-uniform vec3 uCity;
 uniform sampler2D tRiver, tLake;
 uniform vec4 uWx;
 varying float vH;
@@ -226,15 +213,6 @@ void main() {
   float se, sn;
   if (uSmooth > 0.5) { se = slope(bicubic(pn)); sn = slope(bicubic(pn2)); }
   else { se = slope(texture2D(tNorm, pn / sz).r); sn = slope(texture2D(tNorm, pn2 / sz).r); }
-  float cityD = length(up - uCity) * RP, level = smoothstep(50.0, 66.0, cityD);      // plateau de la ville : plus de pentes
-  se *= level; sn *= level;
-  if (cityD < 68.0 && cityD > 50.0) {       // flancs de la digue
-    float f1 = smoothstep(52.0, 58.0, cityD + 0.5) * (1.0 - smoothstep(60.0, 66.0, cityD + 0.5)), f0 = smoothstep(52.0, 58.0, cityD - 0.5) * (1.0 - smoothstep(60.0, 66.0, cityD - 0.5));
-    vec3 away = normalize(up - uCity * dot(up, uCity));
-    float sr = (f1 - f0) * ${(2.85).toFixed(2)};
-    se += sr * dot(away, east); sn += sr * dot(away, north);
-    albedo = mix(albedo, vec3(0.42, 0.40, 0.39), smoothstep(52.0, 55.0, cityD) * (1.0 - smoothstep(63.0, 66.0, cityD)) * 0.8);
-  }
 
   // ── Terraformation : eau dans les creux, végétation selon la latitude, l'altitude et l'humidité ──
   float water = 0.0, ice = 0.0, depthKm = 0.0;
@@ -245,7 +223,7 @@ void main() {
     float sea = step(vH + coast, uSea);
     float lake = smoothstep(1.0 - 0.72 * uWet, 1.03 - 0.72 * uWet, lk) * step(0.004, lk);
     float thr = mix(0.92, 0.3, uWet), river = smoothstep(thr, thr + 0.1, riv) * (1.0 - smoothstep(6.0, 7.5, vH));
-    water = cityD < 59.0 ? 0.0 : max(sea, max(lake, river));
+    water = max(sea, max(lake, river));
     depthKm = max(uSea - vH, 0.0) * sea + 0.3 * (1.0 - sea);
     float elev = max(vH - max(uSea, -4.5), 0.0);
     vec4 n1 = noised(vPos / 260.0), n2 = noised(vPos / 70.0 + 9.0);
@@ -366,19 +344,21 @@ function release(e) {
 
 const blank = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); blank.needsUpdate = true;
 const hemi = [0, 1].map(() => ({ tRiver: { value: blank }, tLake: { value: blank } }));
-let waterAsked = false;
+const waterState = new Map();        // fichier -> 'loading' | 'done' | heure du prochain essai
 function loadWater() {
-  if (waterAsked) return;
-  waterAsked = true;
   hemi.forEach((h, i) => [['tRiver', 'rivers'], ['tLake', 'lakes']].forEach(([u, name]) => {
-    loadBitmap(`${DATA}w/${name}_${'WE'[i]}.webp`).then(bmp => {
+    const file = `${name}_${'WE'[i]}`, st = waterState.get(file);
+    if (st === 'loading' || st === 'done' || st > performance.now()) return;
+    waterState.set(file, 'loading');
+    loadBitmap(`${DATA}w/${file}.webp`).then(bmp => {
       const t = new THREE.Texture(bmp);
       t.flipY = false; t.format = THREE.RedFormat; t.colorSpace = THREE.NoColorSpace;
       t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter; t.anisotropy = maxAniso;
       t.onUpdate = () => { bmp.close(); };
       t.needsUpdate = true;
       h[u].value = t;
-    }).catch(() => { waterAsked = false; });
+      waterState.set(file, 'done');
+    }).catch(() => { waterState.set(file, performance.now() + 5000); });
   }));
 }
 
@@ -409,14 +389,15 @@ class Node {
   request() {
     if (this.state !== NONE) return;
     this.state = LOADING;
+    const gen = this.gen = (this.gen || 0) + 1;      // une réponse d'un chargement abandonné ne touche pas au suivant
     const cl = Math.min(this.l, CMAX), nl = Math.min(this.l, NMAX);
     const c = acquire('c', cl, this.x >> (this.l - cl), this.y >> (this.l - cl));
     const n = acquire('n', nl, this.x >> (this.l - nl), this.y >> (this.l - nl));
     this.res = [c, n];
     const jobs = [c.promise, n.promise];
     if (this.l > HL) jobs.push(loadHi(this.x >> (this.l - HL), this.y >> (this.l - HL)));
-    Promise.all(jobs).then(r => { if (this.state === LOADING) { this.hi = r[2] || null; buildQueue.push(this); } })
-      .catch(() => { if (this.state !== LOADING) return; this.dispose(); this.retry = performance.now() + 4000; });
+    Promise.all(jobs).then(r => { if (this.gen === gen && this.state === LOADING) { this.hi = r[2] || null; buildQueue.push(this); } })
+      .catch(() => { if (this.gen !== gen || this.state !== LOADING) return; this.dispose(); this.retry = performance.now() + 4000; });
   }
   build() {
     if (this.state !== LOADING) return;
@@ -470,6 +451,7 @@ class Node {
     this.state = READY;
   }
   dispose() {
+    this.gen = (this.gen || 0) + 1;
     if (this.children) { for (const c of this.children) c.dispose(); this.children = null; }
     if (this.mesh) { scene.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh.material.dispose(); this.mesh = null; }
     if (this.res) { this.res.forEach(release); this.res = null; }
@@ -625,6 +607,8 @@ function pan(right, fwd, both = false) {     // angles en radians, à altitude c
   if (both) view.q.multiply(qTmp.setFromAxisAngle(AX, -fwd)).multiply(qTmp.setFromAxisAngle(AZ, -right)).normalize();
 }
 function userMoved() { view.rate = 14; }
+/** Surface sur laquelle on vole : le sol, ou la mer là où elle le recouvre. */
+const surfaceAt = (lat, lon) => Math.max(heightAt(lat, lon), shared.uSea.value);
 function flyTo(lat, lon, dist, keepHeading = false, heading = 0) {
   if (keepHeading) {
     const up = AY.clone().applyQuaternion(view.qGoal), f = AZ.clone().negate().applyQuaternion(view.qGoal);
@@ -634,19 +618,13 @@ function flyTo(lat, lon, dist, keepHeading = false, heading = 0) {
   view.qGoal.copy(rigAt(lat, lon, heading));
   if (dist) {
     view.distGoal = clamp(dist, MIN_DIST, MAX_DIST);
-    view.rPGoal = R + shared.uEx.value * heightAt(lat, lon);
+    view.rPGoal = R + shared.uEx.value * surfaceAt(lat, lon);
     view.tiltGoal = clamp(view.tiltGoal, -autoTilt(view.distGoal), ORBIT_MAX - autoTilt(view.distGoal));
     view.onGround = true;
   }
   view.rate = 2.6; view.vel.set(0, 0);
 }
 
-/** Surface sur laquelle on vole : le sol, ou la mer là où elle le recouvre (jamais dans le polder de la ville). */
-function surfaceAt(lat, lon) {
-  const h = heightAt(lat, lon), sea = shared.uSea.value;
-  if (h >= sea) return h;
-  return Math.acos(Math.min(1, dirOf(lat, lon, siteTmp).dot(siteDir))) * R < 59 ? h : sea;
-}
 /** Distance du premier point de terrain le long d'un rayon, ou null s'il part dans le ciel. */
 function castTerrain(ro, rd, maxT = 2e4) {
   const ex = shared.uEx.value, rTop = R + 22 * ex + 1;
@@ -655,7 +633,7 @@ function castTerrain(ro, rd, maxT = 2e4) {
   if (c > 0) { if (h < 0 || b > 0) return null; t = -b - Math.sqrt(h); }
   const tEnd = Math.min(maxT, h > 0 ? -b + Math.sqrt(h) : maxT);
   let prev = t;
-  for (let i = 0; i < 400 && t <= tEnd; i++) {
+  for (let i = 0; i < 1500 && t <= tEnd; i++) {
     tmpV.copy(ro).addScaledVector(rd, t);
     const gap = tmpV.length() - (R + ex * surfaceAt(latOf(tmpV), lonOf(tmpV)));
     if (gap <= 0) {
@@ -666,7 +644,7 @@ function castTerrain(ro, rd, maxT = 2e4) {
       }
       return hi;
     }
-    prev = t; t += Math.max(gap * 0.4, 0.02 + t * 0.003);
+    prev = t; t += Math.max(gap * 0.4, 0.02 + t * 0.008);
   }
   return null;
 }
@@ -691,12 +669,9 @@ function anchor(dir) {
   aP.copy(camera.position);
   if (!dir) dir = camera.getWorldDirection(aD);
   const upHint = aX.set(0, 1, 0).applyQuaternion(camera.quaternion).clone();
-  let t = castTerrain(aP, dir), solid = t !== null;
-  // La station compte aussi : si on la regarde, on tourne autour d'elle.
-  const c = city.stationCenter, along = aO.copy(c).sub(aP).dot(dir);
-  if (along > 0 && (t === null || along < t) && aO.copy(aP).addScaledVector(dir, along).distanceTo(c) < STATION_R) { t = along; solid = true; }
+  const t = castTerrain(aP, dir);
   const rho = t ?? clamp(view.dist, 5, 400);
-  setRig(aX.copy(aP).addScaledVector(dir, Math.max(rho, 0.05)), aP, upHint, solid);
+  setRig(aX.copy(aP).addScaledVector(dir, Math.max(rho, 0.05)), aP, upHint, t !== null);
 }
 /** Tourne la caméra sur place : dx vers la droite, dy vers le bas, en radians. */
 const lD = new THREE.Vector3(), lZ = new THREE.Vector3(), lR = new THREE.Vector3();
@@ -714,7 +689,6 @@ function lookAround(dx, dy) {
 const sun = { lon: -52, ls: 70, speed: 300 };
 const vUp = new THREE.Vector3(), vFwd = new THREE.Vector3(), vT = new THREE.Vector3();
 const keys = new Set();
-let lookedByKey = false;
 
 function flyByKeys(dt) {
   if (!keys.size) return;
@@ -723,7 +697,7 @@ function flyByKeys(dt) {
   const f = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0), r = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
   const u = (keys.has('KeyR') || keys.has('PageUp') || keys.has('Space') ? 1 : 0) - (keys.has('KeyF') || keys.has('PageDown') ? 1 : 0);
   const yaw = (keys.has('ArrowRight') ? 1 : 0) - (keys.has('ArrowLeft') ? 1 : 0), pitch = (keys.has('ArrowDown') ? 1 : 0) - (keys.has('ArrowUp') ? 1 : 0);
-  if (yaw || pitch) { lookAround(yaw * dt * 0.9, pitch * dt * 0.7); lookedByKey = true; }
+  if (yaw || pitch) lookAround(yaw * dt * 0.9, pitch * dt * 0.7);
   if (f || r) { view.vel.set(0, 0); pan(r * step / view.rP, f * step / view.rP, true); }
   if (u) { view.rP = view.rPGoal = Math.max(view.rP + u * step, R - 9 * shared.uEx.value); }
   if (f || r || u || yaw || pitch) userMoved();
@@ -765,7 +739,7 @@ function updateCamera(dt) {
   camDist = camera.position.length(); camAgl = camDist - ground;
   camera.up.copy(vFwd).multiplyScalar(ct).addScaledVector(vUp, st);
   camera.lookAt(vT);
-  camera.near = clamp(Math.min(camAgl * 0.12, Math.max(camera.position.distanceTo(city.stationCenter) - STATION_R - 10, 1) * 0.5), 0.02, 3000);
+  camera.near = clamp(camAgl * 0.12, 0.02, 3000);
   camera.far = camDist + R * 1.2;
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
@@ -886,15 +860,6 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 
-/* ───────────── La ville ───────────── */
-
-const city = createCity(THREE, { shared, ATMO, R, dirOf });
-scene.add(city.group);
-// L'ascenseur et sa station montent bien au-delà du plan lointain de la caméra : ils ont leur propre scène, dessinée en deux passes.
-const spaceScene = new THREE.Scene();
-spaceScene.add(city.space);
-const STATION_R = 70;
-
 /* ───────────── Noms de lieux ───────────── */
 
 // [nom, latitude, longitude est, distance d'apparition en km, site d'atterrissage ?]
@@ -916,23 +881,19 @@ const PLACES = [
   ['Phoenix', 68.22, -125.75, 5000, 1], ['Pathfinder', 19.13, -33.22, 4000, 1],
 ];
 const labelBox = $('labels');
-const labels = [...PLACES, ...city.places].map(([name, lat, lon, far, site, alt = 0]) => {
+const labels = PLACES.map(([name, lat, lon, far, site]) => {
   const el = document.createElement('button');
-  el.className = 'lb' + (site === 2 ? ' city' : site ? ' site' : ''); el.textContent = name;
-  const go = alt ? () => {             // la station : on s'y rend à sa hauteur, vue de côté
-    const c = city.stationCenter;
-    flyTo(latOf(c), lonOf(c), 300);
-    view.rPGoal = c.length(); view.tiltGoal = 75 * DEG - autoTilt(300);
-  } : () => flyTo(lat, lon, Math.min(view.distGoal, site === 2 ? (far > 1e5 ? 70 : 14) : site ? 250 : 900));
+  el.className = 'lb' + (site ? ' site' : ''); el.textContent = name;
+  const go = () => flyTo(lat, lon, Math.min(view.distGoal, site ? 250 : 900));
   el.addEventListener('click', go);
   labelBox.appendChild(el);
   const w = el.offsetWidth;
   el.style.display = 'none';
-  return { el, lat, lon, far, go, alt, dir: dirOf(lat, lon), on: false, x: 0, y: 0, w, top: site === 2 };
+  return { el, lat, lon, far, go, dir: dirOf(lat, lon), on: false, x: 0, y: 0, w };
 });
 let namesOn = true;
-// Ordre de priorité : la ville d'abord, puis l'ordre de la liste. Un nom qui en chevaucherait un autre s'efface.
-const byRank = [...labels.filter(l => l.top), ...labels.filter(l => !l.top)];
+// Priorité dans l'ordre de la liste : un nom qui en chevaucherait un autre déjà placé s'efface.
+const byRank = labels;
 // Les noms ne captent pas la souris (ils gêneraient les glissers) : un clic bref sur le canevas cherche le nom dessous.
 function labelAt(x, y) {
   return byRank.find(l => l.on && x > l.x - 10 && x < l.x + l.w + 4 && Math.abs(y - l.y) < 15) || null;
@@ -944,14 +905,8 @@ function updateLabels(w, h) {
   for (const l of byRank) {
     let on = namesOn && view.dist < l.far;
     if (on) {
-      if (l.alt) {                       // en orbite : caché seulement si la planète est entre nous
-        tmpV.copy(city.stationCenter); tmpV2.copy(tmpV).sub(camera.position);
-        const t = clamp(-camera.position.dot(tmpV2) / tmpV2.lengthSq(), 0, 1);
-        on = tmpV2.multiplyScalar(t).add(camera.position).length() > R;
-      } else {
-        tmpV.copy(l.dir).multiplyScalar(R + ex * sampleLow(l.lat, l.lon));
-        on = tmpV.dot(tmpV2.copy(camera.position).sub(tmpV)) > 0;       // devant l'horizon
-      }
+      tmpV.copy(l.dir).multiplyScalar(R + ex * Math.max(sampleLow(l.lat, l.lon), shared.uSea.value));
+      on = tmpV.dot(tmpV2.copy(camera.position).sub(tmpV)) > 0;       // devant l'horizon
       if (on) {
         tmpV.project(camera);
         on = tmpV.z < 1 && Math.abs(tmpV.x) < 1.05 && Math.abs(tmpV.y) < 1.05;
@@ -982,7 +937,12 @@ function syncPanel() {
   $('vLs').textContent = SEASONS[Math.floor(sun.ls / 90) % 4];
   $('bSpeed').textContent = SPEEDS.find(s => s[0] === sun.speed)[1];
 }
-sEx.addEventListener('input', () => { shared.uEx.value = +sEx.value; syncPanel(); });
+sEx.addEventListener('input', () => {
+  // Le pivot garde sa hauteur relative au sol : il suit la nouvelle exagération.
+  const old = shared.uEx.value, ex = +sEx.value, g = surfaceAt(view.lat, view.lon);
+  view.rP += (ex - old) * g; view.rPGoal += (ex - old) * g;
+  shared.uEx.value = ex; syncPanel();
+});
 sLs.addEventListener('input', () => { sun.ls = +sLs.value; syncPanel(); });
 // Terraformation. Niveaux de la mer : les deux rivages anciens proposés pour l'océan boréal de Mars
 // (Deuteronilus, vers -3,76 km, puis Arabia, vers -2,09 km ; Carr et Head, 2003).
@@ -999,16 +959,18 @@ function setTerra(t) {
 }
 const sTerra = $('sTerra');
 sTerra.addEventListener('input', () => setTerra(+sTerra.value / 100));
-setTerra(0);
+// Un navigateur peut rendre aux curseurs leur position d'avant le rechargement : on part de ce qu'ils affichent.
+shared.uEx.value = +sEx.value; sun.ls = +sLs.value;
+setTerra(+sTerra.value / 100);
 let sunDrag = false;
 sSun.addEventListener('input', () => { sun.lon = wrap180(view.lon - (+sSun.value - 12) * 15); });
 sSun.addEventListener('pointerdown', () => { sunDrag = true; });
 addEventListener('pointerup', () => { sunDrag = false; });
 $('bSpeed').addEventListener('click', () => { sun.speed = SPEEDS[(SPEEDS.findIndex(s => s[0] === sun.speed) + 1) % SPEEDS.length][0]; syncPanel(); });
 $('bNames').addEventListener('click', e => { namesOn = !namesOn; e.currentTarget.setAttribute('aria-pressed', namesOn); });
-$('bGlobe').addEventListener('click', () => { anchor(); view.tiltGoal = 0; flyTo(view.lat, view.lon, HOME.dist); });
-$('bNorth').addEventListener('click', () => { anchor(); flyTo(view.lat, view.lon, 0); view.tiltGoal = view.onGround ? 0 : view.tiltGoal; });
-$('bCity').addEventListener('click', () => { view.tiltGoal = 0; flyTo(SITE.lat, SITE.lon, 70, false, 0.5); });
+const pivotNow = () => { anchor(); const v = tmpV.copy(AY).applyQuaternion(view.qGoal); return [latOf(v), lonOf(v)]; };
+$('bGlobe').addEventListener('click', () => { const [la, lo] = pivotNow(); view.tiltGoal = 0; flyTo(la, lo, HOME.dist); });
+$('bNorth').addEventListener('click', () => { const [la, lo] = pivotNow(); flyTo(la, lo, 0); if (view.onGround) view.tiltGoal = 0; });
 $('bLook').addEventListener('click', e => { view.look = !view.look; e.currentTarget.setAttribute('aria-pressed', view.look); });
 const panel = $('panel'), bPanel = $('bPanel');
 function setPanel(open) { panel.hidden = !open; bPanel.setAttribute('aria-expanded', open); }
@@ -1052,18 +1014,10 @@ function tick(now) {
   updateCamera(dt);
   shared.uTime.value = now / 1000;
   selectTiles();
-  city.update(now / 1000, camera, shared.uEx.value, focalPx, renderer.getPixelRatio());
   renderer.clear();
   renderer.render(sky, camera);
-  // Passe lointaine : ce qui dépasse le plan lointain (le câble, la station). La planète, dessinée ensuite, les recouvre s'ils sont derrière elle.
-  const near = camera.near, far = camera.far;
-  camera.near = far * 0.98; camera.far = 1e6; camera.updateProjectionMatrix();
-  renderer.clearDepth();
-  renderer.render(spaceScene, camera);
-  camera.near = near; camera.far = far; camera.updateProjectionMatrix();
   renderer.clearDepth();
   renderer.render(scene, camera);
-  renderer.render(spaceScene, camera);
   updateLabels(cssW, cssH);
   updateHud(now);
   stats.tiles = shown.length; stats.fps += (1 / dt - stats.fps) * 0.05;
@@ -1101,4 +1055,4 @@ function probe() {                   // couleur au centre de l'image, juste apr�
   gl.readPixels(gl.drawingBufferWidth >> 1, gl.drawingBufferHeight >> 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
   return [...px];
 }
-window.mars = { probe, city, setTerra, SITE, anchor, lookAround, keys, get alt() { return camDist - R; }, levels: () => shown.reduce((a, n) => (a[n.l] = (a[n.l] || 0) + 1, a), {}), view, sun, stats, heightAt, sampleLow, flyTo, shared, camera, get agl() { return camAgl; }, get ready() { return running; } };
+window.mars = { probe, setTerra, anchor, lookAround, keys, get alt() { return camDist - R; }, levels: () => shown.reduce((a, n) => (a[n.l] = (a[n.l] || 0) + 1, a), {}), view, sun, stats, heightAt, sampleLow, flyTo, shared, camera, get agl() { return camAgl; }, get ready() { return running; } };
