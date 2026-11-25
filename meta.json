@@ -1,0 +1,39 @@
+{
+ "visual": {
+  "count": 156,
+  "fetched": "2026-11-25T03:33:33.089Z"
+ },
+ "stations": {
+  "count": 13,
+  "fetched": "2026-11-25T03:33:37.037Z"
+ },
+ "gps-ops": {
+  "count": 32,
+  "fetched": "2026-11-25T03:33:40.565Z"
+ },
+ "galileo": {
+  "count": 32,
+  "fetched": "2026-11-25T03:33:43.670Z"
+ },
+ "weather": {
+  "count": 74,
+  "fetched": "2026-11-25T03:33:46.770Z"
+ },
+ "science": {
+  "count": 45,
+  "fetched": "2026-11-25T03:33:49.870Z"
+ },
+ "resource": {
+  "count": 167,
+  "fetched": "2026-11-25T03:33:52.982Z"
+ },
+ "active": {
+  "count": 15830,
+  "fetched": "2026-11-25T03:33:58.302Z"
+ },
+ "starlink": {
+  "count": 10590,
+  "fetched": "2026-11-25T03:33:58.302Z",
+  "derivedFrom": "active"
+ }
+}
