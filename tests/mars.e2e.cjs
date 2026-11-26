@@ -88,3 +88,45 @@ test('Menu : on passe des satellites à Mars et retour', async ({ page }) => {
   await page.getByRole('link', { name: /Satellites/ }).click();
   await expect(page.locator('#start')).toBeVisible();
 });
+
+test('Mars : repères gardés au rechargement, mesure de distance au clic', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', e => errors.push(String(e)));
+  await page.goto('/mars/index.html');
+  await page.waitForFunction(() => window.mars && window.mars.ready, null, { timeout: 60_000 });
+  // Un quart de méridien : πR/2.
+  expect(await page.evaluate(() => window.mars.gcKm(0, 0, 90, 0))).toBeCloseTo(Math.PI * 3389.5 / 2, 3);
+  await page.evaluate(() => { const m = window.mars; m.sun.speed = 0; m.flyTo(-5, -70, 4000); m.view.rate = 60; });
+  await page.waitForFunction(() => Math.abs(window.mars.view.dist - 4000) < 1, null, { timeout: 30_000 });
+  const vp = page.viewportSize(), cx = vp.width / 2, cy = vp.height / 2;
+
+  // Deux repères posés au toucher.
+  await page.getByRole('button', { name: 'Repères' }).click();
+  await expect(page.locator('#panel')).toBeHidden();
+  await page.mouse.click(cx - 60, cy);
+  await page.mouse.click(cx + 60, cy + 30);
+  await expect(page.locator('#pins li')).toHaveCount(2);
+  await expect(page.locator('#pins input').first()).toHaveValue('Repère 1');
+  await page.locator('#pins input').first().fill('Base Alpha');
+
+  // Mesure : on part du premier repère (accroché), puis un point au sol.
+  await page.getByRole('button', { name: 'Mesurer' }).click();
+  await expect(page.locator('#pinBox')).toBeHidden();
+  const pin = await page.evaluate(() => ({ x: window.mars.pins[0].x, y: window.mars.pins[0].y }));
+  await page.mouse.click(pin.x + 5, pin.y - 4);
+  await page.mouse.click(cx + 80, cy - 120);
+  const m = await page.evaluate(() => { const [a, b] = window.mars.measure, p = window.mars.pins[0]; return { a, b, p, km: window.mars.gcKm(a.lat, a.lon, b.lat, b.lon) }; });
+  expect(m.a).toEqual({ lat: m.p.lat, lon: m.p.lon });
+  expect(m.km).toBeGreaterThan(50);
+  const shown = (await page.locator('#mDist').textContent()).replace(/\s/g, '').replace(',', '.');
+  expect(parseFloat(shown)).toBeCloseTo(m.km, 0);
+  // « Retirer » enlève le dernier point.
+  await page.getByRole('button', { name: 'Retirer le dernier point' }).click();
+  expect(await page.evaluate(() => window.mars.measure.length)).toBe(1);
+
+  // Les repères survivent au rechargement, avec leur nom.
+  await page.reload();
+  await page.waitForFunction(() => window.mars && window.mars.ready, null, { timeout: 60_000 });
+  expect(await page.evaluate(() => window.mars.pins.map(p => p.name))).toEqual(['Base Alpha', 'Repère 2']);
+  expect(errors).toEqual([]);
+});

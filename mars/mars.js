@@ -821,13 +821,19 @@ canvas.addEventListener('pointermove', e => {
   }
 });
 function pointerEnd(e) {
-  if (!pointers.delete(e.pointerId)) return;
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  pointers.delete(e.pointerId);
   pinch = null;
   if (!pointers.size) canvas.classList.remove('drag');
   const now = performance.now();
   if (now - lastMoveT > 80) view.vel.set(0, 0);
-  if (e.type === 'pointerup' && moved < 8 && !pointers.size) {
-    const r = canvas.getBoundingClientRect(), l = labelAt(e.clientX - r.left, e.clientY - r.top);
+  if (e.type === 'pointerup' && moved < 8 && !pointers.size && p.mode !== 'orbit') {
+    const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    if (tool) { toolTap(x, y, e.clientX, e.clientY); lastTap = 0; return; }
+    const pin = pinAt(x, y);
+    if (pin) { goPin(pin); lastTap = 0; return; }
+    const l = labelAt(x, y);
     if (l) { l.go(); lastTap = 0; return; }
   }
   if (e.type === 'pointerup' && e.pointerType !== 'mouse' && moved < 12 && !pointers.size) {
@@ -838,7 +844,7 @@ function pointerEnd(e) {
 canvas.addEventListener('pointerup', pointerEnd);
 canvas.addEventListener('pointercancel', pointerEnd);
 canvas.addEventListener('contextmenu', e => e.preventDefault());
-canvas.addEventListener('dblclick', e => goTo(e.clientX, e.clientY));
+canvas.addEventListener('dblclick', e => { if (!tool) goTo(e.clientX, e.clientY); });
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
   const now = performance.now();
@@ -850,6 +856,7 @@ canvas.addEventListener('wheel', e => {
 }, { passive: false });
 const FLY_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF', 'Space', 'PageUp', 'PageDown', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'ShiftLeft', 'ShiftRight']);
 addEventListener('keydown', e => {
+  if (e.key === 'Escape' && tool && !(e.target instanceof HTMLInputElement)) { setTool(null); return; }
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement && e.code === 'Space' || e.metaKey || e.ctrlKey || e.altKey) return;
   if (FLY_KEYS.has(e.code)) {
     if (!keys.has(e.code) && !e.code.startsWith('Shift') && !e.code.startsWith('Arrow') && !keys.size) anchor();
@@ -974,8 +981,182 @@ $('bNorth').addEventListener('click', () => { const [la, lo] = pivotNow(); flyTo
 $('bLook').addEventListener('click', e => { view.look = !view.look; e.currentTarget.setAttribute('aria-pressed', view.look); });
 const panel = $('panel'), bPanel = $('bPanel');
 function setPanel(open) { panel.hidden = !open; bPanel.setAttribute('aria-expanded', open); }
-bPanel.addEventListener('click', () => setPanel(panel.hidden));
+bPanel.addEventListener('click', () => { if (panel.hidden) setTool(null); setPanel(panel.hidden); });
 setPanel(innerWidth > 720);
+
+/* ───────────── Repères et mesure de distance ─────────────
+   Distances le long du grand cercle, sur la sphère de rayon moyen de Mars (au niveau zéro, sans le relief).
+   Repères et tracé sont dessinés sur un calque 2D, recalculés à chaque image : ils suivent le relief et son exagération. */
+
+const PIN_KEY = 'satsky.mars.pins';
+/** Distance en km le long de la surface, entre deux points (degrés). */
+function gcKm(la1, lo1, la2, lo2) {
+  const a = Math.sin((la2 - la1) * DEG / 2) ** 2 + Math.cos(la1 * DEG) * Math.cos(la2 * DEG) * Math.sin((lo2 - lo1) * DEG / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+let pins = [];
+try {
+  const j = JSON.parse(localStorage.getItem(PIN_KEY) || '[]');
+  if (Array.isArray(j)) pins = j.filter(p => p && Number.isFinite(p.lat) && Number.isFinite(p.lon))
+    .map(p => ({ name: String(p.name || 'Repère').slice(0, 60), lat: clamp(p.lat, -90, 90), lon: wrap180(p.lon), x: 0, y: 0, on: false }));
+} catch { /* stockage indisponible : les repères ne dureront que le temps de la visite */ }
+const savePins = () => { try { localStorage.setItem(PIN_KEY, JSON.stringify(pins.map(({ name, lat, lon }) => ({ name, lat, lon })))); } catch { /* idem */ } };
+const measure = [];                 // points de la mesure en cours : { lat, lon }
+let tool = null;                    // null, 'pin' ou 'ruler'
+const tools = $('tools'), bPin = $('bPin'), bRuler = $('bRuler'), pinList = $('pins');
+const HINTS = {
+  pin: 'Touchez le sol pour poser un repère. Touchez un repère pour le renommer.',
+  ruler: 'Touchez des points sur le sol, ou des repères : la distance s’additionne de point en point, par le plus court chemin à la surface.',
+};
+function setTool(t) {
+  tool = t;
+  bPin.setAttribute('aria-pressed', t === 'pin'); bRuler.setAttribute('aria-pressed', t === 'ruler');
+  tools.hidden = !t;
+  if (t) { setPanel(false); $('tHint').textContent = HINTS[t]; }
+  $('meas').hidden = t !== 'ruler'; $('pinBox').hidden = t !== 'pin';
+  canvas.classList.toggle('pick', !!t);
+  syncMeasure();
+}
+bPin.addEventListener('click', () => setTool(tool === 'pin' ? null : 'pin'));
+bRuler.addEventListener('click', () => setTool(tool === 'ruler' ? null : 'ruler'));
+$('bUndo').addEventListener('click', () => { measure.pop(); syncMeasure(); });
+$('bClear').addEventListener('click', () => { measure.length = 0; syncMeasure(); });
+
+const fmtAlt = h => (h >= 0 ? '+' : '−') + fmtKm(Math.abs(h));
+function renderPins() {
+  pinList.replaceChildren(...pins.map(p => {
+    const li = document.createElement('li'), name = document.createElement('input'), info = document.createElement('small');
+    name.value = p.name; name.maxLength = 60; name.setAttribute('aria-label', 'Nom du repère');
+    name.addEventListener('input', () => { p.name = name.value; savePins(); });
+    name.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === 'Escape') name.blur(); });
+    const go = document.createElement('button'), del = document.createElement('button');
+    go.className = del.className = 'b'; go.textContent = 'Aller'; del.textContent = '×';
+    del.setAttribute('aria-label', 'Supprimer ' + p.name); del.title = 'Supprimer';
+    go.addEventListener('click', () => goPin(p));
+    del.addEventListener('click', () => { pins.splice(pins.indexOf(p), 1); savePins(); renderPins(); });
+    info.textContent = fmtPos(p.lat, p.lon) + (low ? ' · altitude ' + fmtAlt(heightAt(p.lat, p.lon)) : '');
+    p.input = name;
+    li.append(name, go, del, info);
+    return li;
+  }));
+  $('pinsEmpty').hidden = pins.length > 0;
+}
+function addPin(lat, lon) {
+  const n = pins.reduce((m, p) => Math.max(m, +(/^Repère (\d+)$/.exec(p.name) || [0, 0])[1]), 0) + 1;
+  const p = { name: 'Repère ' + n, lat, lon: wrap180(lon), x: 0, y: 0, on: false };
+  pins.push(p); savePins(); renderPins();
+  return p;
+}
+function goPin(p) { flyTo(p.lat, p.lon, Math.min(view.distGoal, 250)); }
+function pinAt(x, y) {
+  let best = null, bd = 16;
+  for (const p of pins) if (p.on) { const d = Math.hypot(x - p.x, y - p.y); if (d < bd) { bd = d; best = p; } }
+  return best;
+}
+/** Le point du sol sous un pixel de l'écran, ou null s'il n'y a que du ciel. */
+function groundAt(cx, cy) {
+  const d = rayAt(cx, cy, new THREE.Vector3()), t = castTerrain(camera.position, d);
+  if (t === null) return null;
+  const v = d.multiplyScalar(t).add(camera.position);
+  return { lat: latOf(v), lon: lonOf(v) };
+}
+function toolTap(x, y, cx, cy) {
+  const pin = pinAt(x, y);
+  if (tool === 'pin') {
+    if (pin) { pin.input.focus(); pin.input.select(); return; }
+    const g = groundAt(cx, cy);
+    if (g) addPin(g.lat, g.lon);
+  } else {
+    const g = pin ? { lat: pin.lat, lon: pin.lon } : groundAt(cx, cy);
+    if (g) { measure.push(g); syncMeasure(); }
+  }
+}
+function measureKm() {
+  let km = 0;
+  for (let i = 1; i < measure.length; i++) km += gcKm(measure[i - 1].lat, measure[i - 1].lon, measure[i].lat, measure[i].lon);
+  return km;
+}
+function syncMeasure() {
+  const n = measure.length;
+  $('mDist').textContent = n > 1 ? fmtKm(measureKm()) : n ? 'touchez un 2ᵉ point' : '–';
+  $('mLeg').textContent = n > 2 ? fmtKm(gcKm(measure[n - 2].lat, measure[n - 2].lon, measure[n - 1].lat, measure[n - 1].lon)) : '–';
+  const a = measure[0], b = measure[n - 1];
+  $('mRise').textContent = n > 1 ? fmtAlt(heightAt(b.lat, b.lon) - heightAt(a.lat, a.lon)) : '–';
+  $('bUndo').disabled = $('bClear').disabled = !n;
+}
+renderPins(); syncMeasure();
+
+// Calque 2D : projection d'un point du sol, masqué derrière l'horizon ou derrière la caméra.
+const ov = $('ov'), octx = ov.getContext('2d');
+const oP = new THREE.Vector3(), oV = new THREE.Vector3(), oA = new THREE.Vector3(), oB = new THREE.Vector3();
+let ovDirty = false;
+function project(lat, lon, w, h, out) {
+  dirOf(lat, lon, oP).multiplyScalar(R + shared.uEx.value * surfaceAt(lat, lon));
+  if (oP.dot(oV.copy(camera.position).sub(oP)) <= 0) return false;
+  oV.copy(oP).applyMatrix4(camera.matrixWorldInverse);
+  if (oV.z > -camera.near) return false;
+  oV.applyMatrix4(camera.projectionMatrix);
+  out[0] = (oV.x + 1) / 2 * w; out[1] = (1 - oV.y) / 2 * h;
+  return true;
+}
+const sp = [0, 0];
+function drawOverlay(w, h) {
+  const dpr = renderer.getPixelRatio();
+  if (ov.width !== Math.round(w * dpr) || ov.height !== Math.round(h * dpr)) { ov.width = Math.round(w * dpr); ov.height = Math.round(h * dpr); }
+  if (!pins.length && !measure.length) {
+    if (ovDirty) { octx.clearRect(0, 0, ov.width, ov.height); ovDirty = false; }
+    for (const p of pins) p.on = false;
+    return;
+  }
+  ovDirty = true;
+  const c = octx;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, w, h);
+  c.lineJoin = c.lineCap = 'round';
+  c.font = '600 12px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif';
+  c.textBaseline = 'middle';
+  // Tracé de la mesure : chaque tronçon suit le grand cercle, échantillonné assez finement pour épouser le relief vu de près.
+  if (measure.length) {
+    const step = clamp(camAgl * 0.08, 0.5, 40), path = [];
+    let open = false;
+    for (let i = 1; i < measure.length; i++) {
+      const a = measure[i - 1], b = measure[i];
+      dirOf(a.lat, a.lon, oA); dirOf(b.lat, b.lon, oB);
+      const th = Math.acos(clamp(oA.dot(oB), -1, 1)), st = Math.sin(th);
+      const n = st < 1e-9 ? 1 : clamp(Math.ceil(th * R / step), 1, 800);
+      for (let k = i === 1 ? 0 : 1; k <= n; k++) {
+        const t = k / n;
+        if (st < 1e-9) oP.copy(t < 0.5 ? oA : oB);
+        else oP.copy(oA).multiplyScalar(Math.sin((1 - t) * th) / st).addScaledVector(oB, Math.sin(t * th) / st);
+        const vis = project(latOf(oP), lonOf(oP), w, h, sp);
+        if (vis) path.push(open ? 'L' : 'M', sp[0], sp[1]);
+        open = vis;
+      }
+    }
+    const line = new Path2D();
+    for (let i = 0; i < path.length; i += 3) path[i] === 'M' ? line.moveTo(path[i + 1], path[i + 2]) : line.lineTo(path[i + 1], path[i + 2]);
+    c.strokeStyle = 'rgba(0,0,0,.55)'; c.lineWidth = 5; c.stroke(line);
+    c.strokeStyle = '#ffcf5c'; c.lineWidth = 2.5; c.stroke(line);
+    measure.forEach((m, i) => {
+      if (!project(m.lat, m.lon, w, h, sp)) return;
+      c.beginPath(); c.arc(sp[0], sp[1], 4.5, 0, 2 * Math.PI);
+      c.fillStyle = '#ffcf5c'; c.fill(); c.strokeStyle = '#05070f'; c.lineWidth = 1.5; c.stroke();
+      if (i === measure.length - 1 && i > 0) tag(c, fmtKm(measureKm()), sp[0] + 11, sp[1] + 18, '#ffcf5c');      // sous le point : le nom d'un repère est à sa hauteur
+    });
+  }
+  for (const p of pins) {
+    p.on = project(p.lat, p.lon, w, h, sp);
+    if (!p.on) continue;
+    p.x = sp[0]; p.y = sp[1];
+    c.beginPath(); c.arc(p.x, p.y, 6, 0, 2 * Math.PI);
+    c.fillStyle = '#ff8f70'; c.fill(); c.strokeStyle = '#fff'; c.lineWidth = 2; c.stroke();
+    if (p.name) tag(c, p.name, p.x + 11, p.y, '#ff8f70');
+  }
+}
+function tag(c, text, x, y, color) {
+  c.lineWidth = 3.5; c.strokeStyle = 'rgba(0,0,0,.8)'; c.strokeText(text, x, y);
+  c.fillStyle = color; c.fillText(text, x, y);
+}
 
 let hudT = 0;
 function updateHud(now) {
@@ -987,6 +1168,7 @@ function updateHud(now) {
   const lh = localHour();
   $('hTime').textContent = $('vSun').textContent = fmtHour(lh);
   if (!sunDrag) sSun.value = lh;
+  if (measure.length > 1) syncMeasure();      // le dénivelé s'affine quand des altitudes plus fines arrivent
 }
 
 /* ───────────── Boucle ───────────── */
@@ -1019,6 +1201,7 @@ function tick(now) {
   renderer.clearDepth();
   renderer.render(scene, camera);
   updateLabels(cssW, cssH);
+  drawOverlay(cssW, cssH);
   updateHud(now);
   stats.tiles = shown.length; stats.fps += (1 / dt - stats.fps) * 0.05;
 }
@@ -1037,7 +1220,7 @@ async function start() {
   await Promise.all(roots.map(r => Promise.all(r.res.map(e => e.promise)).then(step)));
   while (buildQueue.length) buildQueue.shift().build();
   if (roots.some(r => r.state !== READY)) throw new Error('tuiles de base manquantes');
-  syncPanel();
+  syncPanel(); renderPins();
   running = true; lastT = performance.now();
   requestAnimationFrame(tick);
   $('load').classList.add('done');
@@ -1055,4 +1238,4 @@ function probe() {                   // couleur au centre de l'image, juste apr�
   gl.readPixels(gl.drawingBufferWidth >> 1, gl.drawingBufferHeight >> 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
   return [...px];
 }
-window.mars = { probe, setTerra, anchor, lookAround, keys, get alt() { return camDist - R; }, levels: () => shown.reduce((a, n) => (a[n.l] = (a[n.l] || 0) + 1, a), {}), view, sun, stats, heightAt, sampleLow, flyTo, shared, camera, get agl() { return camAgl; }, get ready() { return running; } };
+window.mars = { probe, pins, measure, gcKm, setTool, get tool() { return tool; }, setTerra, anchor, lookAround, keys, get alt() { return camDist - R; }, levels: () => shown.reduce((a, n) => (a[n.l] = (a[n.l] || 0) + 1, a), {}), view, sun, stats, heightAt, sampleLow, flyTo, shared, camera, get agl() { return camAgl; }, get ready() { return running; } };
